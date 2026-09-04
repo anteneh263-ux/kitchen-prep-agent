@@ -1,0 +1,22 @@
+{
+  "_note": "Cumulative share of a day's dish sales served by each clock time, in Europe/Oslo. Used to judge whether the day is running ahead of or behind the morning forecast. Shares must start at 0, end at 1 and never decrease; verify_data.py enforces that. The curve is data: a kitchen with different hours replaces this file, not the code.",
+  "opens": "11:00",
+  "closes": "22:00",
+  "points": [
+    {"time": "11:00", "share": 0.00},
+    {"time": "11:30", "share": 0.03},
+    {"time": "12:00", "share": 0.10},
+    {"time": "12:30", "share": 0.20},
+    {"time": "13:00", "share": 0.30},
+    {"time": "13:30", "share": 0.36},
+    {"time": "14:00", "share": 0.40},
+    {"time": "15:00", "share": 0.44},
+    {"time": "16:00", "share": 0.48},
+    {"time": "17:00", "share": 0.55},
+    {"time": "18:00", "share": 0.66},
+    {"time": "19:00", "share": 0.79},
+    {"time": "20:00", "share": 0.90},
+    {"time": "21:00", "share": 0.97},
+    {"time": "22:00", "share": 1.00}
+  ]
+}

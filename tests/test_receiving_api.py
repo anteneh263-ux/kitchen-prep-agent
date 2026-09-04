@@ -202,3 +202,84 @@ def test_a_production_form_post_redirects_back_to_the_station_list(client):
 
     assert response.status_code == 303
     assert response.headers["location"] == f"/?lang=no&date={config.DEMO_DATE}#station-prep"
+
+
+# --- Intraday ------------------------------------------------------------
+
+
+def _sold(client, sales, as_of="18:00"):
+    return client.post(
+        "/sales/today",
+        json={"date": config.DEMO_DATE, "as_of": as_of, "sales": sales, "source": "toast"},
+    )
+
+
+def test_sales_are_recorded_and_drive_the_intraday_view(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+
+    assert _sold(client, {"classic_burger": 20, "bbq_ribs": 8}).status_code == 201
+
+    view = client.get("/intraday", params={"date": config.DEMO_DATE}).json()
+    assert view["as_of"] == "18:00"
+    assert view["revision"]["sold_total"] == 28.0
+    assert "tasks" in view and "cook_now_tasks" in view
+
+
+def test_the_intraday_view_is_empty_until_something_sells(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    body = client.get("/intraday", params={"date": config.DEMO_DATE}).json()
+    assert body["detail"] == "no sales recorded yet"
+
+
+def test_the_intraday_view_needs_a_plan(client):
+    assert client.get("/intraday", params={"date": "2026-01-01"}).status_code == 404
+    assert _sold(client, {"bbq_ribs": 1}).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "sales", [{}, {"not_a_dish": 3}, {"bbq_ribs": -2}, {"bbq_ribs": "mange"}]
+)
+def test_malformed_sales_are_refused(client, sales):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    assert _sold(client, sales).status_code == 422
+
+
+def test_a_later_observation_supersedes_an_earlier_one(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    _sold(client, {"classic_burger": 10}, as_of="13:00")
+    _sold(client, {"classic_burger": 25}, as_of="17:00")
+
+    view = client.get("/intraday", params={"date": config.DEMO_DATE}).json()
+    assert view["as_of"] == "17:00"
+    assert view["revision"]["sold_total"] == 25.0
+
+
+def test_the_clock_can_be_moved_to_ask_what_it_looks_like_later(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    _sold(client, {"classic_burger": 20}, as_of="13:00")
+
+    early = client.get("/intraday", params={"date": config.DEMO_DATE, "as_of": "13:00"}).json()
+    late = client.get("/intraday", params={"date": config.DEMO_DATE, "as_of": "20:00"}).json()
+
+    assert late["revision"]["service_share"] > early["revision"]["service_share"]
+    assert late["elapsed_service_minutes"] > early["elapsed_service_minutes"]
+
+
+def test_the_kitchen_screen_shows_the_cook_now_panel_once_sales_arrive(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    assert 'id="cook-now"' not in client.get("/", params={"date": config.DEMO_DATE}).text
+
+    _sold(client, {"classic_burger": 30, "bbq_ribs": 12})
+    page = client.get("/", params={"date": config.DEMO_DATE}).text
+    assert 'id="cook-now"' in page and "Lag nå" in page
+
+
+def test_a_sales_form_post_redirects_to_the_cook_now_panel(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    response = client.post(
+        "/sales/today",
+        data={"date": config.DEMO_DATE, "as_of": "15:00", "sales.bbq_ribs": "6", "lang": "no"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/?lang=no&date={config.DEMO_DATE}#cook-now"

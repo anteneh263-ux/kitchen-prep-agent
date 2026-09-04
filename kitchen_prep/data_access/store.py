@@ -9,6 +9,7 @@ Collections / concepts:
   - run_logs/{run_id}    -> step-by-step log, written even on failure
   - inventory_snapshots/{date} -> replay-safe input/output batches for each day
   - inventory_adjustments/{id}  -> append-only physical events (receipts, counts)
+  - sales_observations/{id}     -> append-only cumulative sales during service
 """
 from __future__ import annotations
 
@@ -41,6 +42,8 @@ class BaseStore:
     def get_inventory_snapshot(self, date: str) -> dict | None: ...
     def append_inventory_adjustment(self, adjustment: dict) -> dict: ...
     def list_inventory_adjustments(self, effective_date: str) -> list[dict]: ...
+    def record_sales_observation(self, date: str, observation: dict) -> dict: ...
+    def list_sales_observations(self, date: str) -> list[dict]: ...
 
 
 class LocalJsonStore(BaseStore):
@@ -50,10 +53,12 @@ class LocalJsonStore(BaseStore):
         self.logs_dir = self.base / "run_logs"
         self.inventory_dir = self.base / "inventory_snapshots"
         self.adjustments_dir = self.base / "inventory_adjustments"
+        self.sales_dir = self.base / "sales_observations"
         self.plans_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.inventory_dir.mkdir(parents=True, exist_ok=True)
         self.adjustments_dir.mkdir(parents=True, exist_ok=True)
+        self.sales_dir.mkdir(parents=True, exist_ok=True)
 
     def _plan_path(self, date: str) -> Path:
         return self.plans_dir / f"{date}.json"
@@ -183,6 +188,22 @@ class LocalJsonStore(BaseStore):
 
     def list_inventory_adjustments(self, effective_date: str) -> list[dict]:
         path = self._adjustments_path(effective_date)
+        if not path.exists():
+            return []
+        with open(path, encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+
+    def _sales_path(self, date: str) -> Path:
+        return self.sales_dir / f"{date}.jsonl"
+
+    def record_sales_observation(self, date: str, observation: dict) -> dict:
+        """Append-only: a later observation supersedes an earlier one, never edits it."""
+        with open(self._sales_path(date), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(observation, ensure_ascii=False) + "\n")
+        return observation
+
+    def list_sales_observations(self, date: str) -> list[dict]:
+        path = self._sales_path(date)
         if not path.exists():
             return []
         with open(path, encoding="utf-8") as fh:
@@ -351,6 +372,14 @@ class FirestoreStore(BaseStore):  # pragma: no cover - requires cloud credential
             .where("effective_date", "==", effective_date)
             .stream()
         )
+        return [doc.to_dict() for doc in query]
+
+    def record_sales_observation(self, date: str, observation: dict) -> dict:
+        self.db.collection("sales_observations").add({**observation, "date": date})
+        return observation
+
+    def list_sales_observations(self, date: str) -> list[dict]:
+        query = self.db.collection("sales_observations").where("date", "==", date).stream()
         return [doc.to_dict() for doc in query]
 
     def save_inventory_output(self, date: str, batches: list[dict]) -> None:

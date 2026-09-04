@@ -3,6 +3,8 @@
 Endpoints:
   POST /runs/daily            -> start the idempotent daily run (optional {"date": ...})
   GET  /plans/latest          -> latest published plan (simple mobile view)
+  POST /sales/today           -> record cumulative sales so far today
+  GET  /intraday              -> what to cook now, from what has actually sold
   POST /production            -> record what a station actually produced
   POST /inventory/receipts    -> record what a delivery actually contained
   POST /inventory/counts      -> record what a physical count actually found
@@ -33,7 +35,7 @@ from pydantic import BaseModel
 from .orchestrator import run_daily_prep, today_oslo
 from .data_access import menu as menu_da
 from .data_access import store as store_da
-from .pipeline import production, receiving
+from .pipeline import intraday, production, receiving
 from .render.html import render_home
 
 app = FastAPI(title="Kitchen Prep Agent")
@@ -46,12 +48,38 @@ class RunRequest(BaseModel):
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(lang: str = "no", date: str | None = None) -> HTMLResponse:
-    """Mobile-friendly server-rendered view of the latest published plan."""
+def home(lang: str = "no", date: str | None = None, as_of: str | None = None) -> HTMLResponse:
+    """Mobile-friendly server-rendered view of the latest published plan.
+
+    The intraday view is computed on read, not stored: it depends on the clock,
+    so freezing it onto the plan would publish a stale answer.
+    """
     store = store_da.get_store()
     plans = store.list_plans(limit=14)
     plan = store.get_plan(date) if date else (plans[0] if plans else None)
-    return HTMLResponse(content=render_home(plan, language=lang, available_plans=plans, interactive=True))
+    return HTMLResponse(
+        content=render_home(
+            plan,
+            language=lang,
+            available_plans=plans,
+            interactive=True,
+            intraday=_intraday_view(store, plan, as_of) if plan else None,
+        )
+    )
+
+
+def _intraday_view(store, plan: dict, as_of: str | None) -> dict | None:
+    """The cook-now view for a plan, or None when nothing has sold yet."""
+    observations = store.list_sales_observations(plan["date"])
+    if not observations:
+        return None
+    latest = max(observations, key=lambda o: (o.get("as_of", ""), o.get("recorded_at", "")))
+    if as_of:
+        latest = {**latest, "as_of": as_of}
+    try:
+        return intraday.cook_now(plan, latest)
+    except (intraday.ServiceCurveError, KeyError, ValueError):
+        return None
 
 
 @app.get("/assets/food-hero.webp", include_in_schema=False)
@@ -236,3 +264,62 @@ async def record_production(request: Request):
         lang = "en" if str(payload.get("lang", "no")) == "en" else "no"
         return RedirectResponse(url=f"/?lang={lang}&date={date}#station-prep", status_code=303)
     return JSONResponse(content=record, status_code=201)
+
+
+# --- Intraday: what has sold, and what to cook now -------------------------
+
+
+@app.post("/sales/today")
+async def record_sales(request: Request):
+    """Record cumulative sales per dish so far today.
+
+    Body: ``sales`` (an object of dish_id -> quantity), optionally ``date``,
+    ``as_of`` (HH:MM), ``source``, ``recorded_by``.
+
+    Quantities are cumulative, not increments, so a point-of-sale can retry,
+    duplicate or arrive out of order without corrupting the picture.
+    """
+    payload, from_form = await _request_payload(request)
+    store = store_da.get_store()
+    date = str(payload.get("date") or today_oslo())
+
+    if store.get_plan(date) is None:
+        raise HTTPException(status_code=404, detail="no plan for that date")
+
+    if from_form:  # an HTML form posts flat fields, not a nested object
+        sales = {
+            key.split("sales.", 1)[1]: value
+            for key, value in payload.items()
+            if key.startswith("sales.") and value not in ("", None)
+        }
+        if sales:
+            payload["sales"] = sales
+
+    try:
+        observation = intraday.validate_sales(
+            payload, recorded_at=datetime.now(timezone.utc).isoformat()
+        )
+    except intraday.SalesRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    store.record_sales_observation(date, observation)
+
+    if from_form:
+        lang = "en" if str(payload.get("lang", "no")) == "en" else "no"
+        return RedirectResponse(url=f"/?lang={lang}&date={date}#cook-now", status_code=303)
+    return JSONResponse(content=observation, status_code=201)
+
+
+@app.get("/intraday")
+def intraday_view(date: str | None = None, as_of: str | None = None) -> dict[str, Any]:
+    """What to cook now, recomputed from the latest sales observation."""
+    store = store_da.get_store()
+    run_date = date or today_oslo()
+    plan = store.get_plan(run_date)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="no plan for that date")
+
+    view = _intraday_view(store, plan, as_of)
+    if view is None:
+        return {"date": run_date, "detail": "no sales recorded yet"}
+    return {"date": run_date, **view}

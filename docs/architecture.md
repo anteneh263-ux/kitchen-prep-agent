@@ -280,6 +280,52 @@ post-delivery stock, which is what the person counting was looking at.
 is published on the plan as a `stock_variance` and shown on the dashboard, and
 the append-only adjustment log records who entered it and when.
 
+## The intraday loop
+
+Everything above runs once, at 07:00. That is a planner, not an operating
+system: if the day runs 30 % hot, the kitchen finds out during service.
+
+`POST /sales/today` closes the loop. Quantities are **cumulative for the day**,
+not increments, so a till can retry, duplicate or deliver out of order without
+corrupting the picture — the latest observation simply supersedes the earlier
+one, and nothing is ever edited.
+
+From that, `pipeline/intraday.py` answers four questions in order:
+
+1. **Is the day running to plan?** Sales so far are compared against the share of
+   the day `data/service_curve.json` says should be done by now.
+2. **What will the day actually total?** The morning forecast is rescaled by that
+   pace.
+3. **What is still to come?** Revised day total minus what is already sold.
+4. **What must be cooked now?** Remaining demand exploded to components, minus
+   what the station already produced, ranked by how soon the line runs dry.
+
+Four guards keep this honest:
+
+**A thin signal is discarded, not extrapolated.** Below
+`SERVICE_MIN_SHARE_FOR_REVISION` of the day, the pace means nothing: three covers
+at 11:05 must not imply a four-hundred cover day.
+
+**The revision is clamped** to `SERVICE_REVISION_BAND` around the morning
+forecast. A strange hour may bend the plan; it may not rewrite it. The plan
+records which of the two happened, as `pace` or `clamped_to_band`.
+
+**Only the total is revised, never the mix.** Dish mix really does shift between
+lunch and dinner, but modelling that needs per-dish curves this system does not
+have.
+
+**Being out now outranks everything with time left.** `on_hand` is what the
+station produced minus what the sales ate; when it goes negative the figure is
+reported rather than clamped away, because a line claiming less than nothing is
+telling you the production records are wrong.
+
+The view is **computed on read, never stored on the plan**. It depends on the
+clock, so freezing it would publish a stale answer; `GET /intraday` and the
+dashboard both recompute it, and `?as_of=` asks what the line looks like at
+another moment.
+
+Nothing in this path calls a model. Every number is deterministic Python.
+
 ## Recorded production
 
 The pipeline otherwise assumes the prep plan was executed. It never is, not every

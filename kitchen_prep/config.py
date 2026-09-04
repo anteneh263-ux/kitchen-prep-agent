@@ -30,6 +30,15 @@ BASE_QTY = {
 # Weekday multipliers (Mon=0 .. Sun=6). Fri/Sat ~1.4, Mon/Tue ~0.7.
 WEEKDAY_FACTOR = {0: 0.70, 1: 0.70, 2: 0.85, 3: 1.00, 4: 1.40, 5: 1.40, 6: 1.10}
 
+# --- Intraday re-planning ---
+# Below this much of the day's sales, the pace signal is too thin to rescale
+# from: three covers at 11:05 must not imply a 400-cover day.
+SERVICE_MIN_SHARE_FOR_REVISION = 0.15
+
+# The revised day total is clamped to this band around the morning forecast. A
+# strange hour may bend the plan; it may not rewrite it.
+SERVICE_REVISION_BAND = 0.30
+
 # --- Prep stations ---
 # Stations come from the ingredient master; these are only the display labels.
 # An ingredient naming a station that is not listed here still produces a task —
@@ -57,6 +66,7 @@ INGREDIENTS_PATH = DATA_DIR / "ingredients.json"
 BOOKINGS_PATH = DATA_DIR / "bookings.csv"
 BATCHES_PATH = DATA_DIR / "inventory_batches.json"
 SALES_HISTORY_PATH = DATA_DIR / "sales_history.csv"
+SERVICE_CURVE_PATH = DATA_DIR / "service_curve.json"
 
 # Local dev store root (never committed).
 OUT_DIR = Path(os.environ.get("KP_OUT_DIR", PKG_DIR.parent / "out"))

@@ -18,6 +18,7 @@ from kitchen_prep.data_access import menu as menu_da  # noqa: E402
 from kitchen_prep.data_access import sales as sales_da  # noqa: E402
 from kitchen_prep.data_access import store as store_da  # noqa: E402
 from kitchen_prep.pipeline import ingredients as ingredients_pipe  # noqa: E402
+from kitchen_prep.pipeline import intraday as intraday_pipe  # noqa: E402
 from kitchen_prep.units import SUPPORTED_UNITS  # noqa: E402
 
 
@@ -96,6 +97,14 @@ def check() -> list[str]:
             f"menu.json recipe_basis is {basis!r}; the pipeline only derives purchased "
             "requirements from a 'prepared' basis"
         )
+
+    # 1e. The service curve is a usable cumulative distribution. A curve that
+    # goes backwards or never reaches 1 would silently distort every intraday
+    # revision for the rest of the day.
+    try:
+        errors.extend(intraday_pipe.validate_curve(intraday_pipe.load_curve()))
+    except (OSError, ValueError) as exc:
+        errors.append(f"service curve unreadable: {exc}")
 
     # 2. BASE_QTY keys match the menu exactly.
     base_ids = set(config.BASE_QTY)

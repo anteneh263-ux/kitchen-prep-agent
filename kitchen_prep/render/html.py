@@ -257,6 +257,18 @@ h1 { margin: 0; font-size: clamp(1.7rem, 5vw, 2.7rem); line-height: 1.08; letter
 .intake input, .intake select { min-height: 2.3rem; padding: .4rem .55rem; border: 1px solid var(--line);
   border-radius: .55rem; background: var(--paper); color: var(--ink); font: inherit; font-size: .8rem; }
 .intake .button { margin-top: .15rem; }
+.cook-now { border: 1px solid var(--brand); border-radius: var(--radius); background: var(--paper);
+  box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 1rem; }
+.cook-now .head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+  gap: .5rem; padding: .8rem 1.15rem; background: var(--brand); color: white; }
+.cook-now .head h2 { margin: 0; font-size: 1rem; }
+.cook-now .head .pace { font-size: .76rem; font-weight: 700; opacity: .92; }
+.cook-now .rows .row { align-items: center; }
+.runs-out { display: inline-block; padding: .12rem .45rem; border-radius: 999px; font-size: .66rem;
+  font-weight: 850; color: #8a2b2b; background: #fbeaea; }
+.runs-out--calm { color: #115c31; background: #eaf6ee; }
+@media (prefers-color-scheme: dark) { .runs-out { color: #ffc0c0; background: #3a2323; }
+  .runs-out--calm { color: #b9f0cc; background: #17291e; } }
 .station-head { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem;
   padding: .55rem 1.15rem; background: var(--brand-soft); color: var(--brand);
   font-size: .7rem; font-weight: 850; text-transform: uppercase; letter-spacing: .07em; }
@@ -645,12 +657,84 @@ def _station_block(plan: dict, language: str, interactive: bool = False) -> str:
     return "".join(blocks)
 
 
+def _cook_now_block(intraday: dict | None, language: str) -> str:
+    """What to put on right now, most urgent first.
+
+    The morning plan answers "what do we prep today". This answers "what do we
+    cook in the next few minutes", from what has actually sold — and it only
+    appears once something has.
+    """
+    if not intraday:
+        return ""
+    en = language == "en"
+    revision = intraday.get("revision", {})
+    factor = float(revision.get("revision_factor", 1.0))
+    percent = round(abs(factor - 1.0) * 100)
+
+    if revision.get("revision_basis") == "too_early_to_revise":
+        pace = "Too early to read the pace" if en else "For tidlig til å lese tempoet"
+    elif percent < 1:
+        pace = "Running to plan" if en else "Går etter planen"
+    elif factor > 1:
+        pace = (f"Running {percent}% above the morning forecast" if en
+                else f"Ligger {percent} % over morgenprognosen")
+    else:
+        pace = (f"Running {percent}% below the morning forecast" if en
+                else f"Ligger {percent} % under morgenprognosen")
+
+    urgent = intraday.get("cook_now_tasks", []) or []
+    if urgent:
+        rows = []
+        for task in urgent:
+            unit = unit_label(task.get("unit"), language)
+            minutes = task.get("minutes_left")
+            if minutes is None:
+                clock = f'<span class="runs-out runs-out--calm">{"no burn yet" if en else "ikke i gang"}</span>'
+            elif minutes <= 0:
+                clock = f'<span class="runs-out">{"out now" if en else "tom nå"}</span>'
+            elif minutes <= 30:
+                clock = (f'<span class="runs-out">{"out in" if en else "tom om"} '
+                         f'{minutes} min</span>')
+            else:
+                clock = (f'<span class="runs-out runs-out--calm">{"out in" if en else "tom om"} '
+                         f'{minutes} min</span>')
+            rows.append(
+                f'<li class="row"><span class="rank">{task.get("priority", "")}</span>'
+                f'<div><div class="name">{escape(str(task.get("action") or ""))} — '
+                f'{escape(_item_name(str(task.get("item_id")), language))}</div>'
+                f'<div class="sub">{escape(prep_pipe.station_label(str(task.get("station")), language))} · '
+                f'{"on hand" if en else "på benken"} {escape(_number(task.get("on_hand_qty", 0)))} '
+                f'{escape(unit)}</div></div>'
+                f'<span class="qty">{escape(_number(task.get("cook_now_qty", 0)))} {escape(unit)}'
+                f'<span class="draw">{clock}</span></span></li>'
+            )
+        body = f'<ul class="rows">{"".join(rows)}</ul>'
+    else:
+        body = _empty(
+            "The line is covered for the rest of service at the current pace."
+            if en
+            else "Linjen er dekket ut serveringen med dagens tempo."
+        )
+
+    sold = revision.get("sold_total", 0)
+    head_note = (
+        f'{escape(_number(sold))} {"portions sold by" if en else "porsjoner solgt kl."} '
+        f'{escape(str(intraday.get("as_of", "")))} · {escape(pace)}'
+    )
+    return (
+        f'<section class="cook-now" id="cook-now"><div class="head">'
+        f'<h2>{"Cook now" if en else "Lag nå"}</h2>'
+        f'<span class="pace">{head_note}</span></div>{body}</section>'
+    )
+
+
 def render_home(
     plan: dict | None,
     language: str = "no",
     available_plans: list[dict] | None = None,
     interactive: bool = False,
     demo_url: str | None = None,
+    intraday: dict | None = None,
 ) -> str:
     language = "en" if language == "en" else "no"
     en = language == "en"
@@ -978,6 +1062,7 @@ def render_home(
     receiving_block = _receiving_block(plan, language, interactive)
     trim_block = _trim_block(plan, language)
     station_block = _station_block(plan, language, interactive)
+    cook_now_block = _cook_now_block(intraday, language)
     next_step = (
         "Resolve shortfall" if en else "Løs mangel"
     ) if unresolved_count else "Start prep"
@@ -1002,9 +1087,12 @@ def render_home(
 
 {demo_invite}
 
+{cook_now_block}
+
 {critical_block}
 
 <nav class="section-nav" aria-label="Quick navigation">
+<a class="section-link" href="#cook-now">{"Cook now" if en else "Lag nå"}</a>
 <a class="section-link" href="#service-risks">{"Today’s risks" if en else "Dagens risikoer"}</a>
 <a class="section-link" href="#prep-plan">{"Prep plan" if en else "Prep-plan"}</a>
 <a class="section-link" href="#station-prep">{"Stations" if en else "Stasjoner"}</a>
