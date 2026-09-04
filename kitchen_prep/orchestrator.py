@@ -202,6 +202,14 @@ def run_daily_prep(
         )
 
         prep_tasks = prep_pipe.build_prep_tasks(forecast)
+        station_tasks = prep_pipe.build_station_tasks(requirement_detail)
+        stations = prep_pipe.station_summary(station_tasks)
+        log(
+            "station_prep",
+            tasks=len(station_tasks),
+            stations=len(stations),
+            prep_minutes=round(sum(task["prep_minutes"] for task in station_tasks), 1),
+        )
         pending_orders = [order for order in prior_orders if order["delivery_date"] > date]
         orders = replen_pipe.compute_orders(consumption["remaining_by_item"], date, pending_orders)
         log("replenishment", orders=len(orders))
@@ -232,6 +240,8 @@ def run_daily_prep(
             },
             "trim_loss": trim_loss,
             "prep_tasks": prep_tasks,
+            "station_tasks": station_tasks,
+            "stations": stations,
             "fefo_consumption": consumption["fefo_consumption"],
             "prep_shortfalls": consumption["prep_shortfalls"],
             "replenishment_orders": orders,

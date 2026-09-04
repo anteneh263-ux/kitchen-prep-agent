@@ -183,8 +183,8 @@ the demo scope.
    date are applied while the day's inventory input is frozen, so the plan is
    built on what the kitchen actually has rather than on what was ordered.
 7. **Deterministic core** — FEFO consumption of today's purchased requirements,
-   prep shortfalls, prep task ordering, then replenishment to par from what is
-   genuinely left.
+   prep shortfalls, dish and station task ordering, then replenishment to par
+   from what is genuinely left.
 8. **Gemini step 2 via Google Gen AI SDK** — the frozen plan is handed to the model, which returns a
    prioritisation and briefing in a fixed JSON shape. Invalid or unavailable
    output falls back to a deterministic briefing built from the same plan.
@@ -220,6 +220,35 @@ checks every ingredient, so the failure is caught before a run.
 batch is neither, and a kitchen acts on the two completely differently. They are
 separate fields on the plan and separate sections on the dashboard, never one
 merged number.
+
+## Prep on two axes
+
+A dish task — *17 portions of ribs, 68 minutes* — is what a manager reads. It is
+the wrong axis for a cook. BBQ sauce goes into ribs and wings: one pot, not two
+jobs. Tomato goes into four of the six dishes, so "cut tomatoes" would otherwise
+be spread across four dish tasks that nobody can stand at a board and work from.
+
+So prep is described twice, from the same numbers:
+
+| Axis | Built by | What it answers |
+| --- | --- | --- |
+| Dish assembly | `build_prep_tasks` | How many portions of each dish, and how long assembly takes |
+| Component prep | `build_station_tasks` | What each station must produce, aggregated across every dish that uses it |
+
+A station task carries two quantities, because they are different numbers and a
+cook needs both: `prepare_qty` is what must exist when prep is finished,
+`draw_qty` is what to pull from the walk-in to get there. The gap between them is
+the yield.
+
+Labour is costed on `draw_qty`, not on `prepare_qty` — a cook peels the potatoes
+picked up, not the ones that survive peeling.
+
+**Stations are data, not code.** They come from the ingredient master, so adding
+a bakery is a data change. `config.STATION_LABELS` holds display names only, and
+an ingredient naming an unlabelled station still produces a task, named from its
+id: a missing label must never silently remove work from the prep list.
+`scripts/verify_data.py` refuses a half-declared station — one without an action,
+or without a rate — because that produces a task nobody can act on.
 
 ## Physical corrections: goods receipt and stock count
 

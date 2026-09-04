@@ -2,11 +2,22 @@
 
 Strictly today-facing. Future replenishment is handled separately in
 ``replenishment.py`` and must not be conflated with today's shortfalls.
+
+Prep is described on two axes, because a kitchen works on both:
+
+``build_prep_tasks``
+    One task per dish — assembly and service. How many portions of each dish.
+
+``build_station_tasks``
+    One task per ingredient that needs component prep, aggregated across every
+    dish that uses it and grouped by the station that does the work. This is the
+    axis a cook actually stands at.
 """
 from __future__ import annotations
 
 from collections import defaultdict
 
+from .. import config
 from ..contracts import Forecast
 from ..data_access import menu as menu_da
 from . import fefo
@@ -86,3 +97,76 @@ def consume_today(
         "prep_shortfalls": prep_shortfalls,
         "remaining_by_item": remaining_by_item,
     }
+
+
+# --- Component prep, grouped by station -----------------------------------
+
+def station_label(station: str, language: str) -> str:
+    """Display label for a station. An unlabelled station is named, never dropped."""
+    labels = config.STATION_LABELS.get(station)
+    if labels is None:
+        return station.replace("_", " ").capitalize()
+    return labels["en" if language == "en" else "no"]
+
+
+def build_station_tasks(
+    requirement_detail: dict[str, dict],
+    ingredients: dict[str, dict] | None = None,
+) -> list[dict]:
+    """One component task per ingredient that needs prep, aggregated across dishes.
+
+    A dish task is the wrong axis for a cook. BBQ sauce goes into ribs *and*
+    wings, tomato into four of the six dishes — that is one pot and one chopping
+    board, not two and four jobs. This aggregates the day's requirement per
+    ingredient and hands it to the station that does the work.
+
+    Each task carries both quantities, because they are different numbers and a
+    cook needs both: ``prepare_qty`` is what must exist when prep is finished,
+    ``draw_qty`` is what to pull from the walk-in to get there.
+    """
+    ingredients = ingredients if ingredients is not None else menu_da.ingredients_by_id()
+    tasks: list[dict] = []
+
+    for item_id, values in requirement_detail.items():
+        meta = ingredients[item_id]
+        station = meta.get("station")
+        if not station:  # bought ready to use — no component prep exists
+            continue
+        purchased = values["purchased"]
+        minutes = round(float(meta.get("prep_min_per_purchased_unit", 0)) * purchased, 1)
+        tasks.append(
+            {
+                "task_id": f"prep_{station}_{item_id}",
+                "station": station,
+                "item_id": item_id,
+                "action": meta.get("prep_action") or "",
+                "prepare_qty": values["prepared"],
+                "draw_qty": purchased,
+                "trim_loss": values["trim_loss"],
+                "unit": meta["unit"],
+                "prep_minutes": minutes,
+            }
+        )
+
+    # Longest jobs first, the same rule the dish tasks use, so the two lists can
+    # be read together without switching mental models.
+    tasks.sort(key=lambda t: (-t["prep_minutes"], t["task_id"]))
+    for index, task in enumerate(tasks):
+        task["priority"] = index + 1
+    return tasks
+
+
+def station_summary(station_tasks: list[dict]) -> list[dict]:
+    """Per station: how many tasks and how many minutes, busiest station first.
+
+    Ordering by workload is the useful answer to "where do we start?", and ties
+    break on the station id so the order never wobbles between runs.
+    """
+    totals: dict[str, dict] = {}
+    for task in station_tasks:
+        entry = totals.setdefault(
+            task["station"], {"station": task["station"], "tasks": 0, "prep_minutes": 0.0}
+        )
+        entry["tasks"] += 1
+        entry["prep_minutes"] = round(entry["prep_minutes"] + task["prep_minutes"], 1)
+    return sorted(totals.values(), key=lambda s: (-s["prep_minutes"], s["station"]))

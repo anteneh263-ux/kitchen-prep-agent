@@ -30,6 +30,18 @@ BASE_QTY = {
 # Weekday multipliers (Mon=0 .. Sun=6). Fri/Sat ~1.4, Mon/Tue ~0.7.
 WEEKDAY_FACTOR = {0: 0.70, 1: 0.70, 2: 0.85, 3: 1.00, 4: 1.40, 5: 1.40, 6: 1.10}
 
+# --- Prep stations ---
+# Stations come from the ingredient master; these are only the display labels.
+# An ingredient naming a station that is not listed here still produces a task —
+# it is labelled from its id rather than dropped, because a missing label must
+# never silently remove work from the prep list.
+STATION_LABELS = {
+    "cold": {"no": "Kaldkjøkken", "en": "Cold station"},
+    "butchery": {"no": "Kjøttdisk", "en": "Butchery"},
+    "hot": {"no": "Varmkjøkken", "en": "Hot station"},
+    "bakery": {"no": "Bakeri", "en": "Bakery"},
+}
+
 # Demonstration / reference run date.
 DEMO_DATE = "2026-08-14"
 

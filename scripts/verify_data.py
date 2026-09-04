@@ -53,6 +53,31 @@ def check() -> list[str]:
         except ingredients_pipe.YieldUnavailable as exc:
             errors.append(str(exc))
 
+    # 1b3. Station prep is fully specified or absent — never half-declared. A
+    # station without an action or without a rate would produce a task nobody
+    # can act on and a duration nobody can trust.
+    for item_id, meta in sorted(ingredients.items()):
+        station = meta.get("station")
+        rate = meta.get("prep_min_per_purchased_unit", 0)
+        try:
+            rate = float(rate)
+        except (TypeError, ValueError):
+            errors.append(f"ingredient {item_id!r} has non-numeric prep_min_per_purchased_unit")
+            continue
+        if rate < 0:
+            errors.append(f"ingredient {item_id!r} has negative prep_min_per_purchased_unit")
+        if station:
+            if not meta.get("prep_action"):
+                errors.append(f"ingredient {item_id!r} names station {station!r} but has no prep_action")
+            if rate <= 0:
+                errors.append(
+                    f"ingredient {item_id!r} names station {station!r} but has no prep time"
+                )
+        elif rate > 0:
+            errors.append(
+                f"ingredient {item_id!r} has prep time but no station, so the work would be lost"
+            )
+
     # 1c. Every recipe ingredient resolves to a supported unit.
     for dish in menu_da.load_menu():
         for item_id in dish["recipe"]:

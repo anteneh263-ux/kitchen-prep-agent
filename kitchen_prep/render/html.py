@@ -5,6 +5,7 @@ from datetime import datetime
 from html import escape
 
 from ..data_access import menu as menu_da
+from ..pipeline import prep as prep_pipe
 from ..units import ingredient_unit, portion_label, unit_label
 
 
@@ -255,6 +256,11 @@ h1 { margin: 0; font-size: clamp(1.7rem, 5vw, 2.7rem); line-height: 1.08; letter
 .intake input, .intake select { min-height: 2.3rem; padding: .4rem .55rem; border: 1px solid var(--line);
   border-radius: .55rem; background: var(--paper); color: var(--ink); font: inherit; font-size: .8rem; }
 .intake .button { margin-top: .15rem; }
+.station-head { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem;
+  padding: .55rem 1.15rem; background: var(--brand-soft); color: var(--brand);
+  font-size: .7rem; font-weight: 850; text-transform: uppercase; letter-spacing: .07em; }
+.station-head .load { color: var(--muted); font-weight: 700; letter-spacing: .02em; }
+.draw { display: block; margin-top: .1rem; color: var(--muted); font-size: .72rem; font-weight: 600; }
 .yield-tag { display: inline-block; padding: .12rem .45rem; border-radius: 999px; font-size: .66rem;
   font-weight: 850; letter-spacing: .03em; color: #7a5a12; background: #fdf3dc; }
 @media (prefers-color-scheme: dark) { .yield-tag { color: #ffdfa6; background: #3a2f1f; } }
@@ -514,6 +520,56 @@ def _trim_block(plan: dict, language: str) -> str:
             f'{escape(unit)}</span><br><span class="sub">{percent}% {"yield" if en else "utbytte"}</span></span></li>'
         )
     return f'<ul class="rows">{"".join(rows)}</ul>'
+
+
+def _station_block(plan: dict, language: str) -> str:
+    """Component prep, grouped by the station that does the work.
+
+    A dish task tells a manager what the day looks like. This tells a cook what
+    to pick up: one job per ingredient, aggregated across every dish that uses
+    it, with the quantity to produce and the quantity to draw from stock.
+    """
+    en = language == "en"
+    tasks = plan.get("station_tasks", []) or []
+    if not tasks:
+        return _empty(
+            "Nothing in today's plan needs component prep."
+            if en
+            else "Ingenting i dagens plan krever komponentprep."
+        )
+
+    stations = plan.get("stations") or [{"station": task["station"]} for task in tasks]
+    blocks = []
+    for station in stations:
+        station_id = str(station.get("station", ""))
+        rows = []
+        for task in sorted(
+            (t for t in tasks if t.get("station") == station_id),
+            key=lambda t: t.get("priority", 0),
+        ):
+            item_id = str(task.get("item_id", ""))
+            unit = unit_label(task.get("unit"), language)
+            rows.append(
+                f'<li class="row"><span class="rank">{task.get("priority", "")}</span>'
+                f'<div><div class="name">{escape(str(task.get("action") or ""))} — '
+                f'{escape(_item_name(item_id, language))}</div>'
+                f'<div class="sub">{escape(_duration(task.get("prep_minutes"), language))}</div></div>'
+                f'<span class="qty">{escape(_number(task.get("prepare_qty", 0)))} {escape(unit)}'
+                f'<span class="draw">{"draw" if en else "hent"} '
+                f'{escape(_number(task.get("draw_qty", 0)))} {escape(unit)}</span></span></li>'
+            )
+        if not rows:
+            continue
+        minutes = station.get("prep_minutes")
+        load = (
+            f'{len(rows)} {"jobs" if len(rows) != 1 and en else "job" if en else "oppgaver" if len(rows) != 1 else "oppgave"}'
+            + (f' · {escape(_duration(minutes, language))}' if minutes is not None else "")
+        )
+        blocks.append(
+            f'<div class="station-head"><span>{escape(prep_pipe.station_label(station_id, language))}</span>'
+            f'<span class="load">{load}</span></div><ul class="rows">{"".join(rows)}</ul>'
+        )
+    return "".join(blocks)
 
 
 def render_home(
@@ -848,6 +904,7 @@ def render_home(
 <span class="critical-icon" style="background:var(--good)">✓</span><div><h2>{"No unresolved service risks" if en else "Ingen uløste servicerisikoer"}</h2><p>{"The plan is ready for service." if en else "Planen er klar for service."}</p></div></section>'''
     receiving_block = _receiving_block(plan, language, interactive)
     trim_block = _trim_block(plan, language)
+    station_block = _station_block(plan, language)
     next_step = (
         "Resolve shortfall" if en else "Løs mangel"
     ) if unresolved_count else "Start prep"
@@ -877,6 +934,7 @@ def render_home(
 <nav class="section-nav" aria-label="Quick navigation">
 <a class="section-link" href="#service-risks">{"Today’s risks" if en else "Dagens risikoer"}</a>
 <a class="section-link" href="#prep-plan">{"Prep plan" if en else "Prep-plan"}</a>
+<a class="section-link" href="#station-prep">{"Stations" if en else "Stasjoner"}</a>
 <a class="section-link" href="#orders">{"Orders" if en else "Bestillinger"}</a>
 <a class="section-link" href="#inventory-receiving">{"Receiving" if en else "Varemottak"}</a>
 <a class="section-link" href="#trim-loss">{"Trim loss" if en else "Rensetap"}</a>
@@ -886,6 +944,7 @@ def render_home(
 <div class="stack">
 <section class="panel" id="service-risks"><header class="panel-head"><h2>{"Today’s service risks" if en else "Dagens servicerisikoer"}</h2><p>{"Each shortage includes one recommendation and its approval boundary." if en else "Hver mangel vises med ett anbefalt tiltak og krav til godkjenning."}</p></header>{short_block}</section>
 <section class="panel" id="prep-plan"><header class="panel-head"><h2>{"Today’s prep" if en else "Dagens prep"}</h2><p>{"Work in priority order" if en else "Utfør i prioritert rekkefølge"}</p></header>{prep_block}</section>
+<section class="panel" id="station-prep"><header class="panel-head"><h2>{"Component prep by station" if en else "Komponentprep per stasjon"}</h2><p>{"One job per ingredient, aggregated across every dish that uses it. Produce the first quantity; draw the second from stock." if en else "Én jobb per ingrediens, slått sammen på tvers av alle rettene som bruker den. Lag den første mengden; hent den andre fra lageret."}</p></header>{station_block}</section>
 <section class="panel" id="orders"><header class="panel-head"><h2>{"Future replenishment" if en else "Fremtidig lagerpåfylling"}</h2><p>{"Calculated to restore par stock after scheduled arrivals. These deliveries do not resolve today’s service shortfalls." if en else "Beregnet for å fylle lageret til par-nivå etter planlagte leveranser. Disse leveransene løser ikke dagens mangler."}</p></header>{order_block}</section>
 <section class="panel" id="inventory-receiving"><header class="panel-head"><h2>{"Goods receipt and stock count" if en else "Varemottak og opptelling"}</h2><p>{"Physical reality corrects the plan: partial deliveries and counted stock are recorded here and applied to the next planning day." if en else "Fysisk virkelighet korrigerer planen: delleveranser og talt lager registreres her og brukes fra neste planleggingsdag."}</p></header>{receiving_block}</section>
 <section class="panel" id="forecast"><header class="panel-head"><h2>{"Demand forecast" if en else "Etterspørselsprognose"}</h2><p>{"Expected quantities for today’s service" if en else "Forventede mengder for dagens service"}</p></header>
