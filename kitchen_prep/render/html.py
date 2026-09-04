@@ -255,6 +255,9 @@ h1 { margin: 0; font-size: clamp(1.7rem, 5vw, 2.7rem); line-height: 1.08; letter
 .intake input, .intake select { min-height: 2.3rem; padding: .4rem .55rem; border: 1px solid var(--line);
   border-radius: .55rem; background: var(--paper); color: var(--ink); font: inherit; font-size: .8rem; }
 .intake .button { margin-top: .15rem; }
+.yield-tag { display: inline-block; padding: .12rem .45rem; border-radius: 999px; font-size: .66rem;
+  font-weight: 850; letter-spacing: .03em; color: #7a5a12; background: #fdf3dc; }
+@media (prefers-color-scheme: dark) { .yield-tag { color: #ffdfa6; background: #3a2f1f; } }
 .variance-tag { display: inline-block; padding: .12rem .45rem; border-radius: 999px; font-size: .66rem;
   font-weight: 850; letter-spacing: .03em; }
 .variance-tag--short { color: #8a2b2b; background: #fbeaea; }
@@ -478,6 +481,39 @@ def _receiving_block(plan: dict, language: str, interactive: bool) -> str:
 <button class="button" type="submit">{"Record count" if en else "Registrer opptelling"}</button></form></div>
 <p class="hint" style="padding:0 1.15rem 1.1rem">{"A planned day is frozen: a correction recorded now applies to the next day that has not been planned yet." if en else "En planlagt dag er frosset: en korrigering som registreres nå, gjelder fra den første dagen som ennå ikke er planlagt."}</p>'''
     return applied_block + forms
+
+
+def _trim_block(plan: dict, language: str) -> str:
+    """Trim loss: the gap between prepared weight and purchased weight.
+
+    Kept apart from expiry waste on purpose. This loss is planned and
+    unavoidable; an expired batch is neither, and a kitchen acts on the two
+    completely differently.
+    """
+    en = language == "en"
+    losses = plan.get("trim_loss", []) or []
+    if not losses:
+        return _empty(
+            "No ingredient in today's plan loses weight to trimming."
+            if en
+            else "Ingen ingrediens i dagens plan taper vekt på rensing."
+        )
+
+    rows = []
+    for item in losses:
+        item_id = str(item.get("item_id", ""))
+        unit = unit_label(item.get("unit"), language)
+        percent = round(float(item.get("yield_factor", 1)) * 100)
+        rows.append(
+            f'<li class="row"><div><div class="name">{escape(_item_name(item_id, language))}</div>'
+            f'<div class="sub">{escape(_number(item.get("prepared", 0)))} {escape(unit)} '
+            f'{"on the plate needs" if en else "på tallerkenen krever"} '
+            f'{escape(_number(item.get("purchased", 0)))} {escape(unit)} '
+            f'{"purchased" if en else "innkjøpt"}</div></div>'
+            f'<span class="qty"><span class="yield-tag">−{escape(_number(item.get("trim_loss", 0)))} '
+            f'{escape(unit)}</span><br><span class="sub">{percent}% {"yield" if en else "utbytte"}</span></span></li>'
+        )
+    return f'<ul class="rows">{"".join(rows)}</ul>'
 
 
 def render_home(
@@ -811,6 +847,7 @@ def render_home(
         critical_block = f'''<section class="critical-action" id="critical-actions" style="border-left-color:var(--good);border-color:#b9d8c5;background:#f3fbf6;color:var(--ink)">
 <span class="critical-icon" style="background:var(--good)">✓</span><div><h2>{"No unresolved service risks" if en else "Ingen uløste servicerisikoer"}</h2><p>{"The plan is ready for service." if en else "Planen er klar for service."}</p></div></section>'''
     receiving_block = _receiving_block(plan, language, interactive)
+    trim_block = _trim_block(plan, language)
     next_step = (
         "Resolve shortfall" if en else "Løs mangel"
     ) if unresolved_count else "Start prep"
@@ -842,6 +879,7 @@ def render_home(
 <a class="section-link" href="#prep-plan">{"Prep plan" if en else "Prep-plan"}</a>
 <a class="section-link" href="#orders">{"Orders" if en else "Bestillinger"}</a>
 <a class="section-link" href="#inventory-receiving">{"Receiving" if en else "Varemottak"}</a>
+<a class="section-link" href="#trim-loss">{"Trim loss" if en else "Rensetap"}</a>
 <a class="section-link" href="#forecast">{"Forecast" if en else "Prognose"}</a>
 <a class="section-link" href="#traceability">{"Traceability" if en else "Sporbarhet"}</a></nav>
 
@@ -852,6 +890,7 @@ def render_home(
 <section class="panel" id="inventory-receiving"><header class="panel-head"><h2>{"Goods receipt and stock count" if en else "Varemottak og opptelling"}</h2><p>{"Physical reality corrects the plan: partial deliveries and counted stock are recorded here and applied to the next planning day." if en else "Fysisk virkelighet korrigerer planen: delleveranser og talt lager registreres her og brukes fra neste planleggingsdag."}</p></header>{receiving_block}</section>
 <section class="panel" id="forecast"><header class="panel-head"><h2>{"Demand forecast" if en else "Etterspørselsprognose"}</h2><p>{"Expected quantities for today’s service" if en else "Forventede mengder for dagens service"}</p></header>
 {f'<div class="driver-list">{driver_block}</div>' if driver_block else f'<p class="empty">{"No forecast drivers are available because the reserve model was used." if en else "Ingen prognosedrivere er tilgjengelige fordi reservemodellen ble brukt."}</p>'}{forecast_rows}</section>
+<section class="panel" id="trim-loss"><header class="panel-head"><h2>{"Trim loss" if en else "Renseskjæringstap"}</h2><p>{"A recipe quantity is what reaches the plate. This is what must be bought to get there, and the difference is planned loss — not spoilage." if en else "En oppskriftsmengde er det som havner på tallerkenen. Dette er hva som må kjøpes inn for å komme dit, og differansen er planlagt tap — ikke svinn."}</p></header>{trim_block}</section>
 <section class="panel"><header class="panel-head"><h2>{"Waste requiring attention" if en else "Svinn som krever kontroll"}</h2><p>{"Expired stock is excluded before consumption is calculated" if en else "Utgått lager er fjernet før forbruk beregnes"}</p></header>{waste_block}</section>
 </div>
 

@@ -89,6 +89,10 @@ order.
 - **Gemini demand forecasting** with per-dish reasoning and named drivers.
 - **Validated forecasts with a deterministic fallback** — a bad or missing model
   response degrades the plan's *confidence*, never its *correctness*.
+- **Yield-aware requirements** — a recipe quantity is prepared weight; stock and
+  orders are purchased weight. The purchased requirement is derived from each
+  ingredient's yield factor, and the trim loss is published rather than absorbed.
+  Leaving that gap implicit is how a kitchen under-orders every single day.
 - **FEFO inventory consumption** — earliest expiry consumed first, per batch.
 - **Expiry waste flagging** — batches already expired on the run date are
   removed from availability and surfaced for disposal.
@@ -225,8 +229,8 @@ All files below are **synthetic and generic**, committed under
 
 | Source | File | Contents |
 | --- | --- | --- |
-| Menu and recipes | `menu.json` | 6 generic dishes with per-portion recipes and prep minutes |
-| Ingredient master | `ingredients.json` | 13 generic ingredients with unit, par level, lead time, shelf life and a placeholder supplier name |
+| Menu and recipes | `menu.json` | 6 generic dishes with per-portion recipes and prep minutes, plus `recipe_basis` declaring that recipe quantities are prepared (edible) weight |
+| Ingredient master | `ingredients.json` | 13 generic ingredients with unit, par level, lead time, shelf life, yield factor and a placeholder supplier name |
 | Bookings | `bookings.csv` | Expected covers per date, 2026-08-11 → 2026-08-16. Dates outside this window fall back to a deterministic estimate from sales history, marked on the plan as `covers_source` |
 | Inventory batches | `inventory_batches.json` | 15 seed batches with quantity and expiry date |
 | Sales history | `sales_history.csv` | Generated locally by `scripts/generate_sales_history.py`, seeded and deterministic, covering 2026-06-15 → 2026-08-13 |
@@ -314,6 +318,7 @@ What the suite actually proves:
 | `test_prep_vs_replenishment.py` | Today's shortfalls stay separate from future orders; stock expiring before delivery is excluded from the reorder basis |
 | `test_inventory_persistence.py` | Snapshots are replay-safe; deliveries become dated batches; pending orders prevent duplicates; an explicit epoch can start a clean audited chain |
 | `test_fefo.py` | Earliest-expiry batches are consumed first; expired stock is flagged, not consumed |
+| `test_yield.py` | Purchased requirement is prepared ÷ yield; a missing or absurd yield factor is refused rather than defaulted to 1.0; trim loss is reported separately from expiry waste, and the pork-ribs shortfall it exposes is pinned |
 | `test_receiving.py` | A short delivery replaces the assumed arrival; a counted shortage is taken earliest-expiry-first; receipts apply before counts; a forced replay never applies an event twice; a day with no events hands the chain back untouched |
 | `test_receiving_api.py` | Both receiving routes accept JSON and HTML form posts; malformed events are refused and not stored; an event recorded after the run rolls forward to the next open day |
 | `test_forecast_validate.py` | Missing dishes, unknown ids, non-integer or negative quantities, and out-of-band ratios are all rejected |
@@ -366,8 +371,13 @@ from the committed seed inventory:
 
 - **1 flagged waste batch** — pork ribs batch `b06`, expired 2026-08-13, removed
   from availability rather than silently consumed.
-- **2 prep shortfalls for today** — beef patties (1 pcs) and burger buns
-  (11 pcs): a kitchen problem, listed separately from ordering.
+- **4 prep shortfalls for today** — beef patties (1 pcs), burger buns (11 pcs),
+  pork ribs (0.346 kg) and tomatoes (0.207 kg): a kitchen problem, listed
+  separately from ordering. The last two exist *only* because of the yield
+  conversion — 6 kg of bone-in ribs is not 6 kg of served ribs, and without it
+  the day looks covered right up until service.
+- **2.807 kg of trim loss** across six ingredients, published as its own
+  category rather than folded into waste.
 - **13 replenishment orders** to par, each computed on stock remaining *after*
   today's FEFO consumption, with delivery dates derived from per-ingredient lead
   times.
@@ -520,6 +530,10 @@ Stated plainly, because a system that hides its edges is not safe to run unatten
   the next day that is not yet planned — a day that has been planned is never
   rewritten, so a correction entered late shifts forward rather than
   invalidating a plan the kitchen is already working from.
+- **Yield factors are static per ingredient.** They come from the ingredient
+  master, not from measuring each delivery. A batch of unusually small potatoes
+  yields less than the declared factor, and nothing in the system notices; the
+  correction path for that is a stock count.
 - **Intermediate demand during multi-day lead times is not modelled.** For an
   ingredient with a 3-day lead time, the order covers the gap to par at the
   delivery date, but demand occurring between today and delivery is not
@@ -581,7 +595,7 @@ kitchen-prep-agent/
 │   │   ├── receiving.py             # Goods receipt + stock count corrections
 │   │   ├── forecast_validate.py     # Validation gate (rejects → baseline)
 │   │   ├── baseline.py              # Deterministic same-weekday forecast
-│   │   ├── ingredients.py           # Recipe explosion → requirements
+│   │   ├── ingredients.py           # Recipe explosion + yield → purchased requirements
 │   │   ├── fefo.py                  # First-Expired-First-Out primitives
 │   │   ├── prep.py                  # Today: consumption, shortfalls, prep tasks
 │   │   └── replenishment.py         # Order to par on post-consumption stock

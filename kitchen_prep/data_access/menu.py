@@ -9,9 +9,14 @@ from .. import config
 
 
 @lru_cache(maxsize=1)
-def load_menu() -> list[dict[str, Any]]:
+def load_menu_document() -> dict[str, Any]:
+    """The whole menu file, including ``recipe_basis``."""
     with open(config.MENU_PATH, encoding="utf-8") as fh:
-        return json.load(fh)["dishes"]
+        return json.load(fh)
+
+
+def load_menu() -> list[dict[str, Any]]:
+    return load_menu_document()["dishes"]
 
 
 @lru_cache(maxsize=1)

@@ -17,6 +17,7 @@ from kitchen_prep.data_access import bookings as bookings_da  # noqa: E402
 from kitchen_prep.data_access import menu as menu_da  # noqa: E402
 from kitchen_prep.data_access import sales as sales_da  # noqa: E402
 from kitchen_prep.data_access import store as store_da  # noqa: E402
+from kitchen_prep.pipeline import ingredients as ingredients_pipe  # noqa: E402
 from kitchen_prep.units import SUPPORTED_UNITS  # noqa: E402
 
 
@@ -43,6 +44,15 @@ def check() -> list[str]:
                 f"(supported: {list(SUPPORTED_UNITS)})"
             )
 
+    # 1b2. Every ingredient declares a usable yield factor. A missing factor is
+    # the dangerous case: defaulting it to 1.0 looks correct and under-orders
+    # every purchased quantity, forever.
+    for item_id in sorted(ingredients):
+        try:
+            ingredients_pipe.yield_factor(item_id, ingredients)
+        except ingredients_pipe.YieldUnavailable as exc:
+            errors.append(str(exc))
+
     # 1c. Every recipe ingredient resolves to a supported unit.
     for dish in menu_da.load_menu():
         for item_id in dish["recipe"]:
@@ -52,6 +62,15 @@ def check() -> list[str]:
                     f"recipe {dish['id']} ingredient {item_id!r} does not resolve to a "
                     f"supported unit (got {unit!r})"
                 )
+
+    # 1d. The menu declares what a recipe quantity means, so the yield
+    # conversion is never applied to an undeclared basis.
+    basis = menu_da.load_menu_document().get("recipe_basis")
+    if basis != "prepared":
+        errors.append(
+            f"menu.json recipe_basis is {basis!r}; the pipeline only derives purchased "
+            "requirements from a 'prepared' basis"
+        )
 
     # 2. BASE_QTY keys match the menu exactly.
     base_ids = set(config.BASE_QTY)

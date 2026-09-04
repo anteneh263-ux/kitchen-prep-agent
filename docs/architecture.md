@@ -175,19 +175,51 @@ the demo scope.
 4. **Gemini step 1 via Google Gen AI SDK** — a demand forecast is proposed, then validated. Anything
    outside the contract falls back to the same-weekday baseline, and the plan
    records which path was taken in `forecast_source`.
-5. **Physical corrections** — recorded goods receipts and stock counts for this
+5. **Yield conversion** — recipe quantities are prepared weight, so each
+   ingredient requirement is divided by that ingredient's yield factor to get the
+   purchased quantity FEFO, shortfalls and orders all work in. The difference is
+   published as trim loss.
+6. **Physical corrections** — recorded goods receipts and stock counts for this
    date are applied while the day's inventory input is frozen, so the plan is
    built on what the kitchen actually has rather than on what was ordered.
-6. **Deterministic core** — recipe explosion, FEFO consumption of today's
-   requirements, prep shortfalls, prep task ordering, then replenishment to par
-   from what is genuinely left.
-7. **Gemini step 2 via Google Gen AI SDK** — the frozen plan is handed to the model, which returns a
+7. **Deterministic core** — FEFO consumption of today's purchased requirements,
+   prep shortfalls, prep task ordering, then replenishment to par from what is
+   genuinely left.
+8. **Gemini step 2 via Google Gen AI SDK** — the frozen plan is handed to the model, which returns a
    prioritisation and briefing in a fixed JSON shape. Invalid or unavailable
    output falls back to a deterministic briefing built from the same plan.
-8. **Publish** — Python renders Markdown, the plan is stored, and the run log is
+9. **Publish** — Python renders Markdown, the plan is stored, and the run log is
    appended whether the run succeeded or failed.
-9. **Consumption** — the kitchen opens `GET /` on a phone; other systems read
+10. **Consumption** — the kitchen opens `GET /` on a phone; other systems read
    `GET /plans/latest`.
+
+## Yield: prepared weight is not purchased weight
+
+A recipe says `potato_fresh: 0.25` per portion. Nothing in that number says
+whether it means 250 g of whole potato or 250 g of peeled potato, and the two
+differ by about a fifth. `menu.json` therefore declares `recipe_basis:
+"prepared"` — recipe quantities are what reaches the plate — and every ingredient
+declares a `yield_factor`, the usable fraction of one purchased unit.
+
+    purchased = prepared / yield_factor
+    trim_loss = purchased - prepared
+
+The purchased figure is the authoritative one, because everything downstream
+works in purchased units: batches hold purchased stock, shortfalls compare
+against purchased stock, par levels and supplier orders are purchased units.
+
+Two properties matter here:
+
+**A missing factor is refused, not defaulted.** `yield_factor()` raises
+`YieldUnavailable` for an unknown ingredient, a missing factor, a non-numeric
+one, or one outside `(0, 1]`. A silent default of 1.0 would be the dangerous
+choice: it looks correct and under-orders forever. `scripts/verify_data.py`
+checks every ingredient, so the failure is caught before a run.
+
+**Trim loss is its own category.** It is planned and unavoidable; an expired
+batch is neither, and a kitchen acts on the two completely differently. They are
+separate fields on the plan and separate sections on the dashboard, never one
+merged number.
 
 ## Physical corrections: goods receipt and stock count
 

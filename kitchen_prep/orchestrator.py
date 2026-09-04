@@ -146,8 +146,15 @@ def run_daily_prep(
         forecast, note = _resolve_forecast(date, covers, weather, client)
         log("forecast", source=forecast.forecast_source, note=note)
 
-        required = ingredients_pipe.explode_to_ingredients(forecast)
-        log("ingredient_requirements", items=len(required))
+        requirement_detail = ingredients_pipe.explode_detail(forecast)
+        required = {item: values["purchased"] for item, values in requirement_detail.items()}
+        trim_loss = ingredients_pipe.trim_losses(requirement_detail)
+        log(
+            "ingredient_requirements",
+            items=len(required),
+            trimmed_items=len(trim_loss),
+            trim_loss_total=round(sum(item["trim_loss"] for item in trim_loss), 3),
+        )
 
         epoch = os.environ.get("KP_INVENTORY_EPOCH")
         reset_from_seed = date == epoch
@@ -220,6 +227,10 @@ def run_daily_prep(
             "forecast": forecast.to_dict(),
             "forecast_note": note,
             "ingredient_requirements": required,
+            "ingredient_requirements_prepared": {
+                item: values["prepared"] for item, values in requirement_detail.items()
+            },
+            "trim_loss": trim_loss,
             "prep_tasks": prep_tasks,
             "fefo_consumption": consumption["fefo_consumption"],
             "prep_shortfalls": consumption["prep_shortfalls"],
