@@ -1,0 +1,17 @@
+{
+  "ingredients": [
+    {"id": "beef_patty",     "unit": "stk", "par_level": 60, "lead_time_days": 1, "shelf_life_days": 3,   "supplier": "MeatCo"},
+    {"id": "burger_bun",     "unit": "stk", "par_level": 60, "lead_time_days": 1, "shelf_life_days": 5,   "supplier": "BakeryCo"},
+    {"id": "chicken_breast", "unit": "kg",  "par_level": 10, "lead_time_days": 1, "shelf_life_days": 3,   "supplier": "MeatCo"},
+    {"id": "chicken_wings",  "unit": "kg",  "par_level": 10, "lead_time_days": 2, "shelf_life_days": 3,   "supplier": "MeatCo"},
+    {"id": "pork_ribs",      "unit": "kg",  "par_level": 12, "lead_time_days": 2, "shelf_life_days": 4,   "supplier": "MeatCo"},
+    {"id": "bacon",          "unit": "kg",  "par_level": 5,  "lead_time_days": 2, "shelf_life_days": 10,  "supplier": "MeatCo"},
+    {"id": "cheddar",        "unit": "kg",  "par_level": 4,  "lead_time_days": 2, "shelf_life_days": 21,  "supplier": "DairyCo"},
+    {"id": "bbq_sauce",      "unit": "l",   "par_level": 5,  "lead_time_days": 3, "shelf_life_days": 60,  "supplier": "DryGoods"},
+    {"id": "tortilla",       "unit": "stk", "par_level": 40, "lead_time_days": 3, "shelf_life_days": 14,  "supplier": "DryGoods"},
+    {"id": "fries",          "unit": "kg",  "par_level": 25, "lead_time_days": 1, "shelf_life_days": 120, "supplier": "FrozenCo"},
+    {"id": "lettuce",        "unit": "kg",  "par_level": 3,  "lead_time_days": 1, "shelf_life_days": 4,   "supplier": "GreenCo"},
+    {"id": "tomato",         "unit": "kg",  "par_level": 4,  "lead_time_days": 1, "shelf_life_days": 5,   "supplier": "GreenCo"},
+    {"id": "potato_fresh",   "unit": "kg",  "par_level": 20, "lead_time_days": 1, "shelf_life_days": 10,  "supplier": "GreenCo"}
+  ]
+}

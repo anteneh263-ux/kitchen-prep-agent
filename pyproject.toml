@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kitchen-prep-agent"
+version = "0.1.0"
+description = "Autonomous daily kitchen prep + ordering agent (Gemini Gen AI SDK + Cloud Run)."
+requires-python = ">=3.11"
+dependencies = [
+    "google-adk",
+    "google-genai",
+    "google-cloud-firestore",
+    "fastapi",
+    "uvicorn[standard]",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["kitchen_prep*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires network + real Gemini (GOOGLE_API_KEY)",
+]
+testpaths = ["tests"]

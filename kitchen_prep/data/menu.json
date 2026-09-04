@@ -1,0 +1,16 @@
+{
+  "dishes": [
+    {"id": "classic_burger", "name": "Classic Cheeseburger", "prep_min_per_portion": 1.5,
+     "recipe": {"beef_patty": 1, "burger_bun": 1, "cheddar": 0.03, "lettuce": 0.02, "tomato": 0.04, "fries": 0.20}},
+    {"id": "bacon_burger", "name": "Bacon & Cheddar Burger", "prep_min_per_portion": 1.8,
+     "recipe": {"beef_patty": 1, "burger_bun": 1, "cheddar": 0.04, "bacon": 0.05, "tomato": 0.03, "fries": 0.20}},
+    {"id": "bbq_ribs", "name": "Half Rack BBQ Ribs", "prep_min_per_portion": 4.0,
+     "recipe": {"pork_ribs": 0.45, "bbq_sauce": 0.08, "fries": 0.25}},
+    {"id": "bbq_wings", "name": "BBQ Wings", "prep_min_per_portion": 2.0,
+     "recipe": {"chicken_wings": 0.40, "bbq_sauce": 0.06}},
+    {"id": "chicken_wrap", "name": "Grilled Chicken Wrap", "prep_min_per_portion": 2.5,
+     "recipe": {"chicken_breast": 0.18, "tortilla": 1, "lettuce": 0.03, "tomato": 0.03, "fries": 0.15}},
+    {"id": "chicken_plate", "name": "Grilled Chicken Plate", "prep_min_per_portion": 3.0,
+     "recipe": {"chicken_breast": 0.22, "potato_fresh": 0.25, "tomato": 0.05, "lettuce": 0.03}}
+  ]
+}

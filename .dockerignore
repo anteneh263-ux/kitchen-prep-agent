@@ -1,0 +1,23 @@
+# Keep local state, secrets and build noise out of the image build context.
+.git
+.gitignore
+.venv
+venv
+.env
+out
+__pycache__
+**/__pycache__
+.pytest_cache
+*.pyc
+*.pyo
+*.egg-info
+**/*.egg-info
+
+# Not needed at runtime.
+tests
+docs
+deploy
+README.md
+.env.example
+Dockerfile
+.dockerignore

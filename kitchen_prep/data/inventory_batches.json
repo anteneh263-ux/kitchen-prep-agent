@@ -1,0 +1,19 @@
+{
+  "batches": [
+    {"batch_id":"b01","item_id":"beef_patty","qty":22,"expiry_date":"2026-08-14"},
+    {"batch_id":"b02","item_id":"beef_patty","qty":18,"expiry_date":"2026-08-16"},
+    {"batch_id":"b03","item_id":"burger_bun","qty":30,"expiry_date":"2026-08-17"},
+    {"batch_id":"b04","item_id":"chicken_breast","qty":6,"expiry_date":"2026-08-16"},
+    {"batch_id":"b05","item_id":"chicken_wings","qty":9,"expiry_date":"2026-08-15"},
+    {"batch_id":"b06","item_id":"pork_ribs","qty":7,"expiry_date":"2026-08-13"},
+    {"batch_id":"b07","item_id":"pork_ribs","qty":6,"expiry_date":"2026-08-17"},
+    {"batch_id":"b08","item_id":"bacon","qty":3.5,"expiry_date":"2026-08-20"},
+    {"batch_id":"b09","item_id":"cheddar","qty":2.8,"expiry_date":"2026-09-01"},
+    {"batch_id":"b10","item_id":"bbq_sauce","qty":4.0,"expiry_date":"2026-10-01"},
+    {"batch_id":"b11","item_id":"tortilla","qty":25,"expiry_date":"2026-08-25"},
+    {"batch_id":"b12","item_id":"fries","qty":18,"expiry_date":"2026-12-01"},
+    {"batch_id":"b13","item_id":"lettuce","qty":1.6,"expiry_date":"2026-08-16"},
+    {"batch_id":"b14","item_id":"tomato","qty":2.2,"expiry_date":"2026-08-15"},
+    {"batch_id":"b15","item_id":"potato_fresh","qty":9,"expiry_date":"2026-08-19"}
+  ]
+}
