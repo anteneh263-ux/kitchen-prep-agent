@@ -89,6 +89,12 @@ order.
 - **Gemini demand forecasting** with per-dish reasoning and named drivers.
 - **Validated forecasts with a deterministic fallback** — a bad or missing model
   response degrades the plan's *confidence*, never its *correctness*.
+- **Plate cost, margin and menu engineering** — every portion costed on what is
+  *purchased*, not on what reaches the plate, because the difference is the yield
+  and ignoring it flatters every trimmed dish. Dishes are classified on the
+  standard Kasavana–Smith matrix, orders and waste are stated in kroner, and a
+  dish over the food cost target is flagged for a human — never re-priced by the
+  system.
 - **Intraday re-planning and a cook-now list** — the morning plan is not the last
   word. Cumulative sales posted during service are compared against a service
   curve, the day total is rescaled by the pace it is actually running at, and the
@@ -243,8 +249,8 @@ All files below are **synthetic and generic**, committed under
 
 | Source | File | Contents |
 | --- | --- | --- |
-| Menu and recipes | `menu.json` | 6 generic dishes with per-portion recipes and prep minutes, plus `recipe_basis` declaring that recipe quantities are prepared (edible) weight |
-| Ingredient master | `ingredients.json` | 13 generic ingredients with unit, par level, lead time, shelf life, yield factor, prep station, prep action, prep rate and a placeholder supplier name |
+| Menu and recipes | `menu.json` | 6 generic dishes with per-portion recipes and prep minutes, menu price, plus `recipe_basis` declaring that recipe quantities are prepared (edible) weight |
+| Ingredient master | `ingredients.json` | 13 generic ingredients with unit, par level, lead time, shelf life, yield factor, purchase cost, prep station, prep action, prep rate and a placeholder supplier name |
 | Bookings | `bookings.csv` | Expected covers per date, 2026-08-11 → 2026-08-16. Dates outside this window fall back to a deterministic estimate from sales history, marked on the plan as `covers_source` |
 | Inventory batches | `inventory_batches.json` | 15 seed batches with quantity and expiry date |
 | Service curve | `service_curve.json` | Cumulative share of a day's dish sales served by each clock time, used to read whether the day is running ahead of or behind the morning forecast |
@@ -333,6 +339,7 @@ What the suite actually proves:
 | `test_prep_vs_replenishment.py` | Today's shortfalls stay separate from future orders; stock expiring before delivery is excluded from the reorder basis |
 | `test_inventory_persistence.py` | Snapshots are replay-safe; deliveries become dated batches; pending orders prevent duplicates; an explicit epoch can start a clean audited chain |
 | `test_fefo.py` | Earliest-expiry batches are consumed first; expired stock is flagged, not consumed |
+| `test_costing.py` | A portion is costed on purchased quantity, and costing on prepared weight is shown to understate every trimmed dish; a missing price is refused rather than defaulted to zero; classification needs the whole menu; an alert carries no price and no action, only a flag for a human |
 | `test_intraday.py` | The service curve is a valid cumulative distribution and an unusable one is refused; a thin early signal never rescales the day; an extreme hour is clamped to the band; the dish mix is not reinvented; on-hand is production minus sales; being out now outranks everything with time left |
 | `test_production.py` | The planned quantity comes from the plan, not the payload; producing nothing is a valid record; an unrecorded job is neither complete nor short; the history is append-only and survives a forced replay; recording production never moves stock |
 | `test_station_prep.py` | An ingredient used by several dishes becomes one job; a task carries both the produce and the draw quantity; labour is costed on what the cook handles; stations are data, so a new station needs no code change; an unlabelled station is named rather than dropped |
@@ -554,6 +561,12 @@ Stated plainly, because a system that hides its edges is not safe to run unatten
   the next day that is not yet planned — a day that has been planned is never
   rewritten, so a correction entered late shifts forward rather than
   invalidating a plan the kitchen is already working from.
+- **Prices are static and synthetic.** Costs sit in the ingredient master and do
+  not move with an invoice; a real deployment would feed them from purchasing.
+  Nothing in the system re-prices a menu or changes a portion — a margin alert is
+  a flag for a human, and that boundary is deliberate.
+- **Contribution is before labour.** Prep minutes are computed per station but
+  never costed, so the figure is a food-margin contribution, not a profit.
 - **The intraday revision moves the total, not the mix.** Dish mix genuinely
   shifts between lunch and dinner, but modelling that needs per-dish service
   curves this system does not have, and inventing them would be guessing.
@@ -628,6 +641,7 @@ kitchen-prep-agent/
 │   │   ├── forecast_step.py         # Gemini step 1: propose a forecast
 │   │   └── briefing_step.py         # Gemini step 2: briefing + deterministic fallback
 │   ├── pipeline/
+│   │   ├── costing.py               # Yield-aware plate cost, margin, menu matrix
 │   │   ├── intraday.py              # Pace revision + cook-now from live sales
 │   │   ├── receiving.py             # Goods receipt + stock count corrections
 │   │   ├── production.py            # Recorded production against the prep plan

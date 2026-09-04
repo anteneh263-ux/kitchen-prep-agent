@@ -7,6 +7,7 @@ from html import escape
 from ..data_access import menu as menu_da
 from ..pipeline import prep as prep_pipe
 from ..pipeline import production as production_pipe
+from .. import config as kp_config
 from ..units import ingredient_unit, portion_label, unit_label
 
 
@@ -264,6 +265,22 @@ h1 { margin: 0; font-size: clamp(1.7rem, 5vw, 2.7rem); line-height: 1.08; letter
 .cook-now .head h2 { margin: 0; font-size: 1rem; }
 .cook-now .head .pace { font-size: .76rem; font-weight: 700; opacity: .92; }
 .cook-now .rows .row { align-items: center; }
+.money { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); border-bottom: 1px solid var(--line); }
+.money-cell { padding: .8rem 1.15rem; border-right: 1px solid var(--line); }
+.money-cell:last-child { border-right: 0; }
+.money-cell .k { font-size: .66rem; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.money-cell .v { font-size: 1.35rem; font-weight: 850; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.money-cell .v small { font-size: .7rem; font-weight: 700; color: var(--muted); margin-left: .2rem; }
+.money-cell[data-alert="true"] .v { color: var(--danger, #a8392c); }
+.klass { display: inline-block; padding: .1rem .42rem; border-radius: 999px; font-size: .62rem; font-weight: 850;
+  letter-spacing: .05em; text-transform: uppercase; }
+.klass--star { color: #115c31; background: #eaf6ee; }
+.klass--plowhorse { color: #7a5a12; background: #fdf3dc; }
+.klass--puzzle { color: var(--brand); background: var(--brand-soft); }
+.klass--dog { color: #8a2b2b; background: #fbeaea; }
+@media (prefers-color-scheme: dark) { .klass--star { color: #b9f0cc; background: #17291e; }
+  .klass--plowhorse { color: #ffdfa6; background: #3a2f1f; }
+  .klass--dog { color: #ffc0c0; background: #3a2323; } }
 .runs-out { display: inline-block; padding: .12rem .45rem; border-radius: 999px; font-size: .66rem;
   font-weight: 850; color: #8a2b2b; background: #fbeaea; }
 .runs-out--calm { color: #115c31; background: #eaf6ee; }
@@ -728,6 +745,94 @@ def _cook_now_block(intraday: dict | None, language: str) -> str:
     )
 
 
+_CLASS_LABELS = {
+    "star": ("Star", "Stjerne"),
+    "plowhorse": ("Plowhorse", "Arbeidshest"),
+    "puzzle": ("Puzzle", "Gåte"),
+    "dog": ("Dog", "Taper"),
+    "unforecast": ("Not forecast", "Uten prognose"),
+}
+
+
+def _money(amount: object, currency: str) -> str:
+    """A round figure. Kroner and øre on a wall screen is noise."""
+    try:
+        return f"{float(amount):,.0f}".replace(",", " ") + f" {currency}"
+    except (TypeError, ValueError):
+        return f"— {currency}"
+
+
+def _money_block(plan: dict, language: str) -> str:
+    """What the day is worth, and which dish is quietly eating the margin.
+
+    Every figure here is computed in Python. The model may say which dish
+    deserves a look; it never produces a number a chef re-prices from.
+    """
+    en = language == "en"
+    economics = plan.get("dish_economics", []) or []
+    currency = str(plan.get("currency", kp_config.CURRENCY))
+    alerts = plan.get("margin_alerts", []) or []
+
+    cells = [
+        ("Contribution today" if en else "Bidrag i dag", _money(plan.get("plan_contribution"), currency), False),
+        ("Ordering" if en else "Bestillinger", _money(plan.get("order_value_total"), currency), False),
+        ("Waste" if en else "Svinn", _money(plan.get("waste_value"), currency), float(plan.get("waste_value") or 0) > 0),
+    ]
+    strip = "".join(
+        f'<div class="money-cell" data-alert="{str(alert).lower()}"><div class="k">{escape(label)}</div>'
+        f'<div class="v">{escape(value)}</div></div>'
+        for label, value, alert in cells
+    )
+
+    if not economics:
+        return f'<div class="money">{strip}</div>' + _empty(
+            "No dish economics on this plan." if en else "Ingen rettøkonomi på denne planen."
+        )
+
+    rows = []
+    for item in economics:
+        dish_id = str(item.get("dish_id", ""))
+        label_en, label_no = _CLASS_LABELS.get(str(item.get("classification")), ("—", "—"))
+        ratio = float(item.get("food_cost_ratio", 0)) * 100
+        over = bool(item.get("over_target"))
+        ratio_html = (
+            f'<span class="variance-tag variance-tag--short">{ratio:.1f} %</span>' if over
+            else f'{ratio:.1f} %'
+        )
+        rows.append(
+            f'<li class="row"><div><div class="name">{escape(_dish_name(dish_id))} '
+            f'<span class="klass klass--{escape(str(item.get("classification")))}">'
+            f'{escape(label_en if en else label_no)}</span></div>'
+            f'<div class="sub">{escape(_money(item.get("price"), currency))} − '
+            f'{escape(_money(item.get("cost"), currency))} · '
+            f'{"food cost" if en else "matkost"} {ratio_html}</div></div>'
+            f'<span class="qty">{escape(_money(item.get("contribution"), currency))}'
+            f'<span class="draw">{escape(str(item.get("expected_qty", 0)))} × '
+            f'{escape(_money(item.get("margin"), currency))}</span></span></li>'
+        )
+
+    alert_html = ""
+    if alerts:
+        lines = []
+        for alert in alerts:
+            lines.append(
+                f'{escape(_dish_name(str(alert["dish_id"])))}: '
+                f'{float(alert["food_cost_ratio"]) * 100:.1f} % '
+                f'{"against a" if en else "mot et"} {float(alert["target"]) * 100:.0f} % '
+                f'{"target" if en else "mål"} · '
+                f'{"biggest line" if en else "største post"} '
+                f'{escape(_item_name(str(alert.get("biggest_cost_line") or ""), language))}'
+            )
+        alert_html = (
+            f'<p class="hint" style="padding:.75rem 1.15rem 0;margin:0">'
+            f'<strong>{"Above the food cost target" if en else "Over matkostmålet"}:</strong> '
+            + "; ".join(lines)
+            + f'. {escape("Re-pricing or changing a portion is a human decision." if en else "Å endre pris eller porsjon er en menneskelig beslutning.")}</p>'
+        )
+
+    return f'<div class="money">{strip}</div><ul class="rows">{"".join(rows)}</ul>{alert_html}'
+
+
 def render_home(
     plan: dict | None,
     language: str = "no",
@@ -1062,6 +1167,7 @@ def render_home(
     receiving_block = _receiving_block(plan, language, interactive)
     trim_block = _trim_block(plan, language)
     station_block = _station_block(plan, language, interactive)
+    money_block = _money_block(plan, language)
     cook_now_block = _cook_now_block(intraday, language)
     next_step = (
         "Resolve shortfall" if en else "Løs mangel"
@@ -1099,6 +1205,7 @@ def render_home(
 <a class="section-link" href="#orders">{"Orders" if en else "Bestillinger"}</a>
 <a class="section-link" href="#inventory-receiving">{"Receiving" if en else "Varemottak"}</a>
 <a class="section-link" href="#trim-loss">{"Trim loss" if en else "Rensetap"}</a>
+<a class="section-link" href="#money">{"Money" if en else "Økonomi"}</a>
 <a class="section-link" href="#forecast">{"Forecast" if en else "Prognose"}</a>
 <a class="section-link" href="#traceability">{"Traceability" if en else "Sporbarhet"}</a></nav>
 
@@ -1110,6 +1217,7 @@ def render_home(
 <section class="panel" id="inventory-receiving"><header class="panel-head"><h2>{"Goods receipt and stock count" if en else "Varemottak og opptelling"}</h2><p>{"Physical reality corrects the plan: partial deliveries and counted stock are recorded here and applied to the next planning day." if en else "Fysisk virkelighet korrigerer planen: delleveranser og talt lager registreres her og brukes fra neste planleggingsdag."}</p></header>{receiving_block}</section>
 <section class="panel" id="forecast"><header class="panel-head"><h2>{"Demand forecast" if en else "Etterspørselsprognose"}</h2><p>{"Expected quantities for today’s service" if en else "Forventede mengder for dagens service"}</p></header>
 {f'<div class="driver-list">{driver_block}</div>' if driver_block else f'<p class="empty">{"No forecast drivers are available because the reserve model was used." if en else "Ingen prognosedrivere er tilgjengelige fordi reservemodellen ble brukt."}</p>'}{forecast_rows}</section>
+<section class="panel" id="money"><header class="panel-head"><h2>{"Plate cost and margin" if en else "Porsjonskost og margin"}</h2><p>{"Costed on what is purchased, not on what reaches the plate — the difference is the yield, and ignoring it flatters every trimmed dish." if en else "Beregnet på det som kjøpes inn, ikke på det som havner på tallerkenen — differansen er utbyttet, og å se bort fra den smigrer hver eneste rensede rett."}</p></header>{money_block}</section>
 <section class="panel" id="trim-loss"><header class="panel-head"><h2>{"Trim loss" if en else "Renseskjæringstap"}</h2><p>{"A recipe quantity is what reaches the plate. This is what must be bought to get there, and the difference is planned loss — not spoilage." if en else "En oppskriftsmengde er det som havner på tallerkenen. Dette er hva som må kjøpes inn for å komme dit, og differansen er planlagt tap — ikke svinn."}</p></header>{trim_block}</section>
 <section class="panel"><header class="panel-head"><h2>{"Waste requiring attention" if en else "Svinn som krever kontroll"}</h2><p>{"Expired stock is excluded before consumption is calculated" if en else "Utgått lager er fjernet før forbruk beregnes"}</p></header>{waste_block}</section>
 </div>

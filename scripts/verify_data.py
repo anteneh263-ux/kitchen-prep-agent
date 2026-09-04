@@ -17,6 +17,7 @@ from kitchen_prep.data_access import bookings as bookings_da  # noqa: E402
 from kitchen_prep.data_access import menu as menu_da  # noqa: E402
 from kitchen_prep.data_access import sales as sales_da  # noqa: E402
 from kitchen_prep.data_access import store as store_da  # noqa: E402
+from kitchen_prep.pipeline import costing as costing_pipe  # noqa: E402
 from kitchen_prep.pipeline import ingredients as ingredients_pipe  # noqa: E402
 from kitchen_prep.pipeline import intraday as intraday_pipe  # noqa: E402
 from kitchen_prep.units import SUPPORTED_UNITS  # noqa: E402
@@ -78,6 +79,19 @@ def check() -> list[str]:
             errors.append(
                 f"ingredient {item_id!r} has prep time but no station, so the work would be lost"
             )
+
+    # 1b4. Every ingredient and every dish carries a usable price. A missing
+    # cost would quietly value a plate at less than it costs to make.
+    for item_id in sorted(ingredients):
+        try:
+            costing_pipe.ingredient_cost(item_id, ingredients)
+        except costing_pipe.PriceUnavailable as exc:
+            errors.append(str(exc))
+    for dish in menu_da.load_menu():
+        try:
+            costing_pipe.dish_price(dish["id"], menu_da.menu_by_id())
+        except costing_pipe.PriceUnavailable as exc:
+            errors.append(str(exc))
 
     # 1c. Every recipe ingredient resolves to a supported unit.
     for dish in menu_da.load_menu():

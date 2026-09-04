@@ -30,6 +30,12 @@ BASE_QTY = {
 # Weekday multipliers (Mon=0 .. Sun=6). Fri/Sat ~1.4, Mon/Tue ~0.7.
 WEEKDAY_FACTOR = {0: 0.70, 1: 0.70, 2: 0.85, 3: 1.00, 4: 1.40, 5: 1.40, 6: 1.10}
 
+# --- Money ---
+# Food cost as a share of menu price. A dish above this is flagged for a human;
+# nothing in the system re-prices anything by itself.
+TARGET_FOOD_COST_RATIO = 0.32
+CURRENCY = "NOK"
+
 # --- Intraday re-planning ---
 # Below this much of the day's sales, the pace signal is too thin to rescale
 # from: three covers at 11:05 must not imply a 400-cover day.

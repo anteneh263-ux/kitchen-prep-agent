@@ -280,6 +280,42 @@ post-delivery stock, which is what the person counting was looking at.
 is published on the plan as a `stock_variance` and shown on the dashboard, and
 the append-only adjustment log records who entered it and when.
 
+## Money: plate cost and margin
+
+Cost has the same shape as the yield problem, and gets it wrong in the same
+direction. You pay for the 0.577 kg of bone-in ribs that yields the 0.45 kg on
+the plate, so:
+
+    portion cost = Σ (recipe qty / yield factor) x cost per purchased unit
+
+Costing on prepared weight understates every trimmed ingredient, every day, and
+always in the flattering direction. `test_costing.py` proves that rather than
+asserting it.
+
+From there the arithmetic is ordinary — and entirely Python's. Gemini may say
+*which* dish deserves attention and why; it may never produce the cost, the
+margin or the classification. A margin a chef re-prices a menu from is not
+something a language model gets to invent.
+
+Menu engineering follows the standard Kasavana–Smith matrix. A dish is popular
+when its share of forecast portions clears 70 % of an even share, and profitable
+when its contribution margin clears the menu average; the four quadrants keep
+their usual names, because a chef already knows what a plowhorse is.
+
+| | Popular | Not popular |
+| --- | --- | --- |
+| **Above average margin** | star | puzzle |
+| **Below average margin** | plowhorse | dog |
+
+Three figures reach the plan: the contribution the day's forecast is worth, what
+the ordering costs, and what the expired batches cost when they were bought.
+Waste stated in kilos is easy to nod at; waste stated in kroner is not.
+
+**An alert is a flag, never an action.** A dish over `TARGET_FOOD_COST_RATIO` is
+surfaced with its biggest cost line and `requires_human_approval`. Re-pricing a
+menu or shrinking a portion has consequences a planner cannot see, so the system
+does not do it.
+
 ## The intraday loop
 
 Everything above runs once, at 07:00. That is a planner, not an operating

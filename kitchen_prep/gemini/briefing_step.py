@@ -36,6 +36,11 @@ def build_deterministic_briefing(plan: dict) -> dict:
         f"{ingredient_unit(b['item_id'], 'en')}) expired {b['expiry_date']} — discard."
         for b in waste
     ]
+    for alert in plan.get("margin_alerts", []) or []:
+        warnings.append(
+            f"{alert['dish_id']} food cost is {alert['food_cost_ratio'] * 100:.1f}% against a "
+            f"{alert['target'] * 100:.0f}% target — {alert['biggest_cost_line']} is the biggest line."
+        )
     if plan["forecast"]["forecast_source"] == "deterministic_fallback":
         warnings.append("Forecast used the deterministic fallback (no model output).")
 

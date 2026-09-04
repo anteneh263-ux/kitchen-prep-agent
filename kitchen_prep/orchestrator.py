@@ -21,6 +21,7 @@ from .data_access import store as store_da
 from .data_access import weather as weather_da
 from .gemini import briefing_step, forecast_step
 from .gemini.client import GeminiUnavailable, get_client
+from .pipeline import costing as costing_pipe
 from .pipeline import ingredients as ingredients_pipe
 from .pipeline import prep as prep_pipe
 from .pipeline import receiving as receiving_pipe
@@ -212,7 +213,18 @@ def run_daily_prep(
         )
         pending_orders = [order for order in prior_orders if order["delivery_date"] > date]
         orders = replen_pipe.compute_orders(consumption["remaining_by_item"], date, pending_orders)
-        log("replenishment", orders=len(orders))
+        orders, order_value_total = costing_pipe.value_orders(orders)
+        log("replenishment", orders=len(orders), order_value=order_value_total)
+
+        economics = costing_pipe.menu_economics(forecast.to_dict())
+        alerts = costing_pipe.margin_alerts(economics)
+        waste_value = costing_pipe.waste_value(consumption["waste_flagged"])
+        log(
+            "costing",
+            contribution=costing_pipe.plan_contribution(economics),
+            margin_alerts=len(alerts),
+            waste_value=waste_value,
+        )
 
         remaining_stock = {
             item: round(sum(b["qty"] for b in batch_list), 3)
@@ -246,6 +258,12 @@ def run_daily_prep(
             "prep_shortfalls": consumption["prep_shortfalls"],
             "replenishment_orders": orders,
             "waste_flagged": consumption["waste_flagged"],
+            "currency": config.CURRENCY,
+            "dish_economics": economics,
+            "margin_alerts": alerts,
+            "plan_contribution": costing_pipe.plan_contribution(economics),
+            "order_value_total": order_value_total,
+            "waste_value": waste_value,
             "inventory_adjustments": applied_adjustments,
             "stock_variances": stock_variances,
             "remaining_stock": remaining_stock,
