@@ -280,6 +280,32 @@ post-delivery stock, which is what the person counting was looking at.
 is published on the plan as a `stock_variance` and shown on the dashboard, and
 the append-only adjustment log records who entered it and when.
 
+## Recorded production
+
+The pipeline otherwise assumes the prep plan was executed. It never is, not every
+day: a station runs out of time, a pot scorches, someone goes home sick. Nothing
+in the published plan said so, and the first anyone knew was service.
+
+`POST /production` records what a station actually made against a planned job.
+The planned quantity is read from the stored plan, never from the request, so a
+client cannot move the target it is being measured against. The record lands on
+the plan through the same append-only pattern as operator decisions — a current
+figure plus a full history — and a forced recalculation carries both forward,
+because they record what people did.
+
+**Silence is treated as silence.** A job with no record is *unrecorded*: neither
+complete nor short. Counting it as done is how a missed prep job reaches service
+unnoticed; counting it as failed would drown the real shortfalls in noise.
+
+**It does not touch inventory, and that is deliberate.** A goods receipt and a
+stock count both correct stock, so they are applied while the day's inventory
+input is frozen. Production is a different kind of statement. If the hot station
+made 6 of the planned 8 litres, the raw material it did not use is still in the
+walk-in — but nothing here knows which batch it returned to or what expiry it now
+carries, and inventing that is exactly the guessing the rest of the system
+refuses. The stock consequence is corrected by a stock count, which is the
+truthful instrument for it.
+
 ## Public interactive sandbox
 
 `GET /demo` is deliberately outside the production flow above. A visitor creates

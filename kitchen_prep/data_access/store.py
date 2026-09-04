@@ -26,6 +26,7 @@ class BaseStore:
     def get_latest_plan(self) -> dict | None: ...
     def list_plans(self, limit: int = 14) -> list[dict]: ...
     def record_plan_action(self, date: str, item_id: str, status: str, occurred_at: str) -> dict | None: ...
+    def record_production(self, date: str, record: dict) -> dict | None: ...
     def append_run_log(self, run_id: str, entry: dict) -> None: ...
     def get_or_create_inventory_input(
         self,
@@ -105,6 +106,15 @@ class LocalJsonStore(BaseStore):
             "updated_at": occurred_at,
         }
         plan.setdefault("action_history", []).append(event)
+        return self.save_plan(date, plan, overwrite=True)
+
+    def record_production(self, date: str, record: dict) -> dict | None:
+        """Append-only execution log kept on the plan itself."""
+        plan = self.get_plan(date)
+        if plan is None:
+            return None
+        plan.setdefault("production_actuals", {})[record["task_id"]] = dict(record)
+        plan.setdefault("production_history", []).append(dict(record))
         return self.save_plan(date, plan, overwrite=True)
 
     def append_run_log(self, run_id: str, entry: dict) -> None:
@@ -256,6 +266,25 @@ class FirestoreStore(BaseStore):  # pragma: no cover - requires cloud credential
                 "updated_at": occurred_at,
             }
             plan.setdefault("action_history", []).append(event)
+            txn.set(ref, plan)
+            return plan
+
+        return update(transaction)
+
+    def record_production(self, date: str, record: dict) -> dict | None:
+        from google.cloud import firestore  # lazy import
+
+        ref = self.db.collection("daily_plans").document(date)
+        transaction = self.db.transaction()
+
+        @firestore.transactional
+        def update(txn):
+            snap = ref.get(transaction=txn)
+            if not snap.exists:
+                return None
+            plan = snap.to_dict()
+            plan.setdefault("production_actuals", {})[record["task_id"]] = dict(record)
+            plan.setdefault("production_history", []).append(dict(record))
             txn.set(ref, plan)
             return plan
 

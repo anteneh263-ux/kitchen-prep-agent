@@ -6,6 +6,7 @@ from html import escape
 
 from ..data_access import menu as menu_da
 from ..pipeline import prep as prep_pipe
+from ..pipeline import production as production_pipe
 from ..units import ingredient_unit, portion_label, unit_label
 
 
@@ -268,8 +269,10 @@ h1 { margin: 0; font-size: clamp(1.7rem, 5vw, 2.7rem); line-height: 1.08; letter
   font-weight: 850; letter-spacing: .03em; }
 .variance-tag--short { color: #8a2b2b; background: #fbeaea; }
 .variance-tag--over { color: #7a5a12; background: #fdf3dc; }
+.variance-tag--done { color: #115c31; background: #eaf6ee; }
 @media (prefers-color-scheme: dark) { .variance-tag--short { color: #ffc0c0; background: #3a2323; }
-  .variance-tag--over { color: #ffdfa6; background: #3a2f1f; } }
+  .variance-tag--over { color: #ffdfa6; background: #3a2f1f; }
+  .variance-tag--done { color: #b9f0cc; background: #17291e; } }
 .trace-details { margin-top: 1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); box-shadow: var(--shadow-sm); }
 .trace-details > summary { cursor: pointer; list-style: none; padding: 1rem 1.15rem; font-size: .88rem; font-weight: 850; }
 .trace-details > summary::-webkit-details-marker { display: none; }
@@ -522,7 +525,12 @@ def _trim_block(plan: dict, language: str) -> str:
     return f'<ul class="rows">{"".join(rows)}</ul>'
 
 
-def _station_block(plan: dict, language: str) -> str:
+_PRODUCTION_FORM = (
+    '<div class="intake"><form method="post" action="/production">\n<input type="hidden" name="lang" value="{language}"><input type="hidden" name="date" value="{date}">\n<h3>{heading}</h3>\n<p class="hint">{hint}</p>\n<label>{job_label}<select name="task_id" required>{options}</select></label>\n<label>{qty_label}<input type="number" name="produced_qty" min="0" step="0.001" required></label>\n<label>{note_label}<input type="text" name="note" maxlength="200"></label>\n<button class="button" type="submit">{submit}</button></form></div>'
+)
+
+
+def _station_block(plan: dict, language: str, interactive: bool = False) -> str:
     """Component prep, grouped by the station that does the work.
 
     A dish task tells a manager what the day looks like. This tells a cook what
@@ -539,6 +547,7 @@ def _station_block(plan: dict, language: str) -> str:
         )
 
     stations = plan.get("stations") or [{"station": task["station"]} for task in tasks]
+    actuals = plan.get("production_actuals", {}) or {}
     blocks = []
     for station in stations:
         station_id = str(station.get("station", ""))
@@ -549,14 +558,28 @@ def _station_block(plan: dict, language: str) -> str:
         ):
             item_id = str(task.get("item_id", ""))
             unit = unit_label(task.get("unit"), language)
+            record = actuals.get(str(task.get("task_id")))
+            if record is None:
+                state = f'<span class="draw">{"not recorded" if en else "ikke registrert"}</span>'
+            elif float(record.get("variance_qty", 0)) < -1e-9:
+                state = (
+                    f'<span class="variance-tag variance-tag--short">'
+                    f'{escape(_number(record.get("produced_qty", 0)))} {escape(unit)} '
+                    f'{"made" if en else "laget"}</span>'
+                )
+            else:
+                state = (
+                    f'<span class="variance-tag variance-tag--done">✓ '
+                    f'{escape(_number(record.get("produced_qty", 0)))} {escape(unit)}</span>'
+                )
             rows.append(
                 f'<li class="row"><span class="rank">{task.get("priority", "")}</span>'
                 f'<div><div class="name">{escape(str(task.get("action") or ""))} — '
                 f'{escape(_item_name(item_id, language))}</div>'
-                f'<div class="sub">{escape(_duration(task.get("prep_minutes"), language))}</div></div>'
+                f'<div class="sub">{escape(_duration(task.get("prep_minutes"), language))} · '
+                f'{"draw" if en else "hent"} {escape(_number(task.get("draw_qty", 0)))} {escape(unit)}</div></div>'
                 f'<span class="qty">{escape(_number(task.get("prepare_qty", 0)))} {escape(unit)}'
-                f'<span class="draw">{"draw" if en else "hent"} '
-                f'{escape(_number(task.get("draw_qty", 0)))} {escape(unit)}</span></span></li>'
+                f'<span class="draw">{state}</span></span></li>'
             )
         if not rows:
             continue
@@ -568,6 +591,56 @@ def _station_block(plan: dict, language: str) -> str:
         blocks.append(
             f'<div class="station-head"><span>{escape(prep_pipe.station_label(station_id, language))}</span>'
             f'<span class="load">{load}</span></div><ul class="rows">{"".join(rows)}</ul>'
+        )
+
+    done = production_pipe.completion(tasks, actuals)
+    if done["short_tasks"]:
+        headline = (
+            f'{done["short_tasks"]} '
+            + ("jobs produced less than planned" if en else "jobber produserte mindre enn planlagt")
+        )
+    else:
+        headline = (
+            f'{done["recorded_tasks"]} {"of" if en else "av"} {done["planned_tasks"]} '
+            + ("jobs recorded" if en else "jobber registrert")
+        )
+    blocks.append(
+        f'<p class="hint" style="padding:.75rem 1.15rem 0;margin:0">{escape(headline)}. '
+        + escape(
+            "A job with no record is unrecorded — neither complete nor short."
+            if en
+            else "En jobb uten registrering er uregistrert — verken fullført eller kort."
+        )
+        + "</p>"
+    )
+
+    if interactive and tasks:
+        options = "".join(
+            f'<option value="{escape(str(task.get("task_id")))}">'
+            f'{escape(prep_pipe.station_label(str(task.get("station")), language))} · '
+            f'{escape(_item_name(str(task.get("item_id")), language))} '
+            f'({escape(_number(task.get("prepare_qty", 0)))} '
+            f'{escape(unit_label(task.get("unit"), language))})</option>'
+            for task in sorted(tasks, key=lambda t: t.get("priority", 0))
+        )
+        blocks.append(
+            _PRODUCTION_FORM.format(
+                language=language,
+                date=escape(str(plan.get("date", ""))),
+                options=options,
+                heading="Record what was produced" if en else "Registrer hva som ble laget",
+                hint=(
+                    "Measured against the planned quantity on this plan. It does not move stock — "
+                    "correct that with a stock count."
+                    if en
+                    else "Måles mot den planlagte mengden i denne planen. Den flytter ikke lager — "
+                    "korriger det med en opptelling."
+                ),
+                job_label="Prep job" if en else "Prep-jobb",
+                qty_label="Quantity produced" if en else "Produsert mengde",
+                note_label="Note" if en else "Merknad",
+                submit="Record production" if en else "Registrer produksjon",
+            )
         )
     return "".join(blocks)
 
@@ -904,7 +977,7 @@ def render_home(
 <span class="critical-icon" style="background:var(--good)">✓</span><div><h2>{"No unresolved service risks" if en else "Ingen uløste servicerisikoer"}</h2><p>{"The plan is ready for service." if en else "Planen er klar for service."}</p></div></section>'''
     receiving_block = _receiving_block(plan, language, interactive)
     trim_block = _trim_block(plan, language)
-    station_block = _station_block(plan, language)
+    station_block = _station_block(plan, language, interactive)
     next_step = (
         "Resolve shortfall" if en else "Løs mangel"
     ) if unresolved_count else "Start prep"

@@ -146,3 +146,59 @@ def test_a_recorded_correction_reaches_the_next_published_plan(client):
     assert [item["note"] for item in plan["inventory_adjustments"]] == ["delivery never arrived"]
     assert plan["stock_variances"][0]["item_id"] == "beef_patty"
     assert plan["stock_variances"][0]["variance_qty"] < 0
+
+
+# --- Recorded production -------------------------------------------------
+
+
+def test_production_is_recorded_against_the_planned_quantity(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    plan = client.get("/plans/latest").json()
+    task = plan["station_tasks"][0]
+
+    response = client.post(
+        "/production",
+        json={
+            "date": config.DEMO_DATE,
+            "task_id": task["task_id"],
+            "produced_qty": 0,
+            "note": "ran out of time",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["planned_qty"] == task["prepare_qty"]
+    assert body["variance_qty"] == -task["prepare_qty"]
+
+    published = client.get("/plans/latest").json()
+    assert published["production_actuals"][task["task_id"]]["note"] == "ran out of time"
+
+
+def test_production_for_an_unplanned_job_is_refused(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    response = client.post(
+        "/production", json={"date": config.DEMO_DATE, "task_id": "prep_cold_nope", "produced_qty": 1}
+    )
+    assert response.status_code == 422
+
+
+def test_production_for_a_date_with_no_plan_is_a_not_found(client):
+    response = client.post(
+        "/production", json={"date": "2026-01-01", "task_id": "prep_cold_tomato", "produced_qty": 1}
+    )
+    assert response.status_code == 404
+
+
+def test_a_production_form_post_redirects_back_to_the_station_list(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    task = client.get("/plans/latest").json()["station_tasks"][0]
+
+    response = client.post(
+        "/production",
+        data={"date": config.DEMO_DATE, "task_id": task["task_id"], "produced_qty": "1", "lang": "no"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/?lang=no&date={config.DEMO_DATE}#station-prep"

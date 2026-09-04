@@ -256,9 +256,15 @@ def run_daily_prep(
         plan["briefing"] = briefing
         plan["briefing_source"] = briefing_source
         plan["briefing_markdown"] = md_render.render(plan)
-        # Operator decisions are audit data and survive a forced recalculation.
+        # Operator decisions and recorded production are audit data: they record
+        # what people did, so a recalculation must never erase them.
         if existing_plan:
-            for key in ("operational_actions", "action_history"):
+            for key in (
+                "operational_actions",
+                "action_history",
+                "production_actuals",
+                "production_history",
+            ):
                 if key in existing_plan:
                     plan[key] = existing_plan[key]
         log("briefing", source=briefing_source)

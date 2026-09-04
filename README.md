@@ -107,6 +107,10 @@ order.
 - **Par-level replenishment on post-consumption stock**, with expiring batches
   excluded and open deliveries counted; received orders become dated FEFO
   batches without duplicate ordering.
+- **Recorded production** — the kitchen records what a station actually made
+  against what the plan asked for. A job with no record is *unrecorded*, never
+  silently counted as done. The record does not move stock: unused raw material
+  is corrected by a stock count rather than invented back into a batch.
 - **Goods receipt and stock count** — the kitchen records what a delivery
   actually contained and what a count actually found. Partial deliveries and
   counted shortages correct the snapshot chain instead of compounding silently,
@@ -323,6 +327,7 @@ What the suite actually proves:
 | `test_prep_vs_replenishment.py` | Today's shortfalls stay separate from future orders; stock expiring before delivery is excluded from the reorder basis |
 | `test_inventory_persistence.py` | Snapshots are replay-safe; deliveries become dated batches; pending orders prevent duplicates; an explicit epoch can start a clean audited chain |
 | `test_fefo.py` | Earliest-expiry batches are consumed first; expired stock is flagged, not consumed |
+| `test_production.py` | The planned quantity comes from the plan, not the payload; producing nothing is a valid record; an unrecorded job is neither complete nor short; the history is append-only and survives a forced replay; recording production never moves stock |
 | `test_station_prep.py` | An ingredient used by several dishes becomes one job; a task carries both the produce and the draw quantity; labour is costed on what the cook handles; stations are data, so a new station needs no code change; an unlabelled station is named rather than dropped |
 | `test_yield.py` | Purchased requirement is prepared ÷ yield; a missing or absurd yield factor is refused rather than defaulted to 1.0; trim loss is reported separately from expiry waste, and the pork-ribs shortfall it exposes is pinned |
 | `test_receiving.py` | A short delivery replaces the assumed arrival; a counted shortage is taken earliest-expiry-first; receipts apply before counts; a forced replay never applies an event twice; a day with no events hands the chain back untouched |
@@ -346,6 +351,7 @@ What the suite actually proves:
 | --- | --- | --- |
 | `GET` | `/` | Mobile-friendly server-rendered HTML view of the latest published plan. Shows run status as **OK**, or **DEGRADERT** when a fallback was used. |
 | `GET` | `/plans/latest` | The latest published plan as JSON. Returns `{"detail": "no plans yet"}` when nothing has been published. |
+| `POST` | `/production` | Records what a station actually produced. Body: `task_id`, `produced_qty`, optional `date`, `note`, `recorded_by`. The planned quantity is read from the stored plan, never from the request. Accepts JSON or an HTML form post. |
 | `POST` | `/inventory/receipts` | Records what a delivery actually contained. Body: `item_id`, `qty_received`, optional `order_by_date` (corrects the assumed arrival), `expiry_date`, `note`, `recorded_by`. Accepts JSON or an HTML form post. |
 | `POST` | `/inventory/counts` | Records what a physical count actually found. Body: `item_id`, `counted_qty`, optional `note`, `recorded_by`. Accepts JSON or an HTML form post. |
 | `GET` | `/inventory/adjustments` | Physical events recorded for a date (`?date=YYYY-MM-DD`, default today). |
@@ -571,6 +577,10 @@ Stated plainly, because a system that hides its edges is not safe to run unatten
   simple and explainable; it does not model holidays, local events or trend.
 - **No supplier integration.** Replenishment orders are computed and published,
   not transmitted. Placing them is a human step by design.
+- **Recorded production does not reconcile stock by itself.** It states what a
+  station made; the raw material a missed job left in the walk-in is corrected by
+  a stock count. Deriving it automatically would mean inventing which batch the
+  material returned to and what expiry it now carries.
 - **Firestore is not emulated in CI.** `FirestoreStore` requires cloud
   credentials and is excluded from offline coverage; the same snapshot contract
   is exercised through the local JSON backend. The production Firestore path is
@@ -602,6 +612,7 @@ kitchen-prep-agent/
 │   │   └── briefing_step.py         # Gemini step 2: briefing + deterministic fallback
 │   ├── pipeline/
 │   │   ├── receiving.py             # Goods receipt + stock count corrections
+│   │   ├── production.py            # Recorded production against the prep plan
 │   │   ├── forecast_validate.py     # Validation gate (rejects → baseline)
 │   │   ├── baseline.py              # Deterministic same-weekday forecast
 │   │   ├── ingredients.py           # Recipe explosion + yield → purchased requirements
