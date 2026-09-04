@@ -22,6 +22,7 @@ from .data_access import weather as weather_da
 from .gemini import briefing_step, forecast_step
 from .gemini.client import GeminiUnavailable, get_client
 from .pipeline import costing as costing_pipe
+from .pipeline import dayclose as dayclose_pipe
 from .pipeline import ingredients as ingredients_pipe
 from .pipeline import prep as prep_pipe
 from .pipeline import receiving as receiving_pipe
@@ -42,7 +43,9 @@ def today_oslo() -> str:
     return datetime.now(ZoneInfo(config.TIMEZONE)).date().isoformat()
 
 
-def _resolve_forecast(date: str, covers: int, weather: dict, client) -> tuple[Forecast, str]:
+def _resolve_forecast(
+    date: str, covers: int, weather: dict, client, extra_rows: list[dict] | None = None
+) -> tuple[Forecast, str]:
     """Return (forecast, note). Only model-side failures trigger the baseline."""
     weekday = _date.fromisoformat(date).weekday()
     context = forecast_step.build_context(date, covers, weather, weekday)
@@ -53,10 +56,10 @@ def _resolve_forecast(date: str, covers: int, weather: dict, client) -> tuple[Fo
         return forecast, "gemini_ok"
     except GeminiUnavailable as exc:
         logger.warning("forecast fallback: model unavailable: %s", exc)
-        return baseline_forecast(date, covers), f"fallback:model_unavailable:{exc}"
+        return baseline_forecast(date, covers, extra_rows), f"fallback:model_unavailable:{exc}"
     except ForecastRejected as exc:
         logger.warning("forecast fallback: model response rejected: %s", exc)
-        return baseline_forecast(date, covers), f"fallback:rejected:{exc}"
+        return baseline_forecast(date, covers, extra_rows), f"fallback:rejected:{exc}"
 
 
 def _prior_orders(store: store_da.BaseStore, run_date: str) -> list[dict]:
@@ -138,13 +141,18 @@ def run_daily_prep(
         existing_plan = store.get_plan(date) if force else None
 
         log("start", date=date)
-        covers, covers_source = bookings_da.resolve_expected_covers(date)
+        # Days the kitchen closed extend the seeded history, so the baseline
+        # learns from real service instead of reading a frozen seed forever.
+        recorded_history = dayclose_pipe.history_rows(store.list_day_actuals())
+        log("recorded_history", rows=len(recorded_history))
+
+        covers, covers_source = bookings_da.resolve_expected_covers(date, recorded_history)
         log("covers", expected_covers=covers, covers_source=covers_source)
 
         weather = weather_da.get_weather(date)
         log("weather", **weather)
 
-        forecast, note = _resolve_forecast(date, covers, weather, client)
+        forecast, note = _resolve_forecast(date, covers, weather, client, recorded_history)
         log("forecast", source=forecast.forecast_source, note=note)
 
         requirement_detail = ingredients_pipe.explode_detail(forecast)

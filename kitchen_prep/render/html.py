@@ -7,6 +7,7 @@ from html import escape
 from ..data_access import menu as menu_da
 from ..pipeline import prep as prep_pipe
 from ..pipeline import production as production_pipe
+from ..pipeline import dayclose as dayclose_pipe
 from .. import config as kp_config
 from ..units import ingredient_unit, portion_label, unit_label
 
@@ -833,6 +834,111 @@ def _money_block(plan: dict, language: str) -> str:
     return f'<div class="money">{strip}</div><ul class="rows">{"".join(rows)}</ul>{alert_html}'
 
 
+_WASTE_REASONS = {
+    "expired": ("Expired", "Utgått"),
+    "overprepped": ("Over-prepped", "Overpreppet"),
+    "spillage": ("Spillage", "Søl"),
+    "quality": ("Quality", "Kvalitet"),
+    "other": ("Other", "Annet"),
+}
+
+
+def _day_close_block(plan: dict, day_close: dict | None, language: str, interactive: bool) -> str:
+    """What was thrown and why, and whether the prep plan adds up.
+
+    FEFO already catches an expired batch. This is the half only a person at the
+    bin can see — above all the prepped food thrown at closing time, which is the
+    honest score on whether the plan produced too much.
+    """
+    en = language == "en"
+    day_close = day_close or {}
+    waste = day_close.get("waste") or {"reasons": [], "total_value": 0, "overprepped_value": 0}
+    currency = str(plan.get("currency", "NOK"))
+
+    if waste["reasons"]:
+        rows = []
+        for entry in waste["reasons"]:
+            label_en, label_no = _WASTE_REASONS.get(entry["reason"], (entry["reason"],) * 2)
+            items = ", ".join(
+                f'{escape(_item_name(item_id, language))} {escape(_number(qty))}'
+                for item_id, qty in sorted(entry["items"].items())
+            )
+            rows.append(
+                f'<li class="row"><div><div class="name">{escape(label_en if en else label_no)}</div>'
+                f'<div class="sub">{items}</div></div>'
+                f'<span class="qty">{escape(_money(entry["value"], currency))}'
+                f'<span class="draw">{entry["records"]} '
+                f'{"records" if entry["records"] != 1 and en else "record" if en else "registreringer" if entry["records"] != 1 else "registrering"}'
+                f'</span></span></li>'
+            )
+        waste_html = f'<ul class="rows">{"".join(rows)}</ul>'
+    else:
+        waste_html = _empty(
+            "Nothing has been recorded at the bin today."
+            if en
+            else "Ingenting er registrert ved bøtta i dag."
+        )
+
+    unexplained = [
+        row for row in (day_close.get("reconciliation") or [])
+        if abs(float(row.get("unexplained_qty", 0))) > 0.05
+    ]
+    if unexplained:
+        lines = ", ".join(
+            f'{escape(_item_name(str(row["item_id"]), language))} '
+            f'{escape(_number(row["unexplained_qty"]))} {escape(unit_label(row.get("unit"), language))}'
+            for row in unexplained[:5]
+        )
+        reconcile_html = (
+            f'<p class="hint" style="padding:.75rem 1.15rem 0;margin:0">'
+            f'<strong>{"Unaccounted for" if en else "Ikke gjort rede for"}:</strong> {lines}. '
+            + escape(
+                "Produced minus sold minus thrown should be nothing."
+                if en
+                else "Laget minus solgt minus kastet skal være ingenting."
+            )
+            + "</p>"
+        )
+    else:
+        reconcile_html = ""
+
+    if waste["overprepped_value"] > 0:
+        headline = (
+            f'<p class="hint" style="padding:.75rem 1.15rem 0;margin:0">'
+            f'{escape(_money(waste["overprepped_value"], currency))} '
+            + escape(
+                "of today's waste was over-prepping, not spoilage — that is the plan's own score."
+                if en
+                else "av dagens svinn var overprepping, ikke fordervelse — det er planens egen karakter."
+            )
+            + "</p>"
+        )
+    else:
+        headline = ""
+
+    form = ""
+    if interactive:
+        options = "".join(
+            f'<option value="{escape(item_id)}">{escape(_item_name(item_id, language))}</option>'
+            for item_id in sorted(menu_da.ingredients_by_id())
+        )
+        reasons = "".join(
+            f'<option value="{escape(key)}">{escape(labels[0] if en else labels[1])}</option>'
+            for key, labels in _WASTE_REASONS.items()
+        )
+        form = f'''<div class="intake"><form method="post" action="/waste">
+<input type="hidden" name="lang" value="{language}"><input type="hidden" name="date" value="{escape(str(plan.get("date", "")))}">
+<h3>{"Record what was thrown" if en else "Registrer hva som ble kastet"}</h3>
+<p class="hint">{"The reason is the point. Over-prepped is a plan problem; expired is a rotation problem." if en else "Årsaken er poenget. Overpreppet er et planproblem; utgått er et rotasjonsproblem."}</p>
+<label>{"Ingredient" if en else "Ingrediens"}<select name="item_id" required>{options}</select></label>
+<label>{"Quantity" if en else "Mengde"}<input type="number" name="qty" min="0" step="0.001" required></label>
+<label>{"Reason" if en else "Årsak"}<select name="reason" required>{reasons}</select></label>
+<label>{"Note" if en else "Merknad"}<input type="text" name="note" maxlength="200"></label>
+<button class="button" type="submit">{"Record waste" if en else "Registrer svinn"}</button></form></div>'''
+
+    return waste_html + headline + reconcile_html + form
+
+
 def render_home(
     plan: dict | None,
     language: str = "no",
@@ -840,6 +946,7 @@ def render_home(
     interactive: bool = False,
     demo_url: str | None = None,
     intraday: dict | None = None,
+    day_close: dict | None = None,
 ) -> str:
     language = "en" if language == "en" else "no"
     en = language == "en"
@@ -1168,6 +1275,7 @@ def render_home(
     trim_block = _trim_block(plan, language)
     station_block = _station_block(plan, language, interactive)
     money_block = _money_block(plan, language)
+    day_close_block = _day_close_block(plan, day_close, language, interactive)
     cook_now_block = _cook_now_block(intraday, language)
     next_step = (
         "Resolve shortfall" if en else "Løs mangel"
@@ -1206,6 +1314,7 @@ def render_home(
 <a class="section-link" href="#inventory-receiving">{"Receiving" if en else "Varemottak"}</a>
 <a class="section-link" href="#trim-loss">{"Trim loss" if en else "Rensetap"}</a>
 <a class="section-link" href="#money">{"Money" if en else "Økonomi"}</a>
+<a class="section-link" href="#day-close">{"At the bin" if en else "Ved bøtta"}</a>
 <a class="section-link" href="#forecast">{"Forecast" if en else "Prognose"}</a>
 <a class="section-link" href="#traceability">{"Traceability" if en else "Sporbarhet"}</a></nav>
 
@@ -1217,6 +1326,7 @@ def render_home(
 <section class="panel" id="inventory-receiving"><header class="panel-head"><h2>{"Goods receipt and stock count" if en else "Varemottak og opptelling"}</h2><p>{"Physical reality corrects the plan: partial deliveries and counted stock are recorded here and applied to the next planning day." if en else "Fysisk virkelighet korrigerer planen: delleveranser og talt lager registreres her og brukes fra neste planleggingsdag."}</p></header>{receiving_block}</section>
 <section class="panel" id="forecast"><header class="panel-head"><h2>{"Demand forecast" if en else "Etterspørselsprognose"}</h2><p>{"Expected quantities for today’s service" if en else "Forventede mengder for dagens service"}</p></header>
 {f'<div class="driver-list">{driver_block}</div>' if driver_block else f'<p class="empty">{"No forecast drivers are available because the reserve model was used." if en else "Ingen prognosedrivere er tilgjengelige fordi reservemodellen ble brukt."}</p>'}{forecast_rows}</section>
+<section class="panel" id="day-close"><header class="panel-head"><h2>{"Recorded waste" if en else "Registrert svinn"}</h2><p>{"FEFO catches an expired batch. This is the half only a person at the bin can see — and over-prepping is the plan scoring itself." if en else "FEFO fanger en utgått batch. Dette er halvdelen bare en person ved bøtta ser — og overprepping er planen som gir seg selv karakter."}</p></header>{day_close_block}</section>
 <section class="panel" id="money"><header class="panel-head"><h2>{"Plate cost and margin" if en else "Porsjonskost og margin"}</h2><p>{"Costed on what is purchased, not on what reaches the plate — the difference is the yield, and ignoring it flatters every trimmed dish." if en else "Beregnet på det som kjøpes inn, ikke på det som havner på tallerkenen — differansen er utbyttet, og å se bort fra den smigrer hver eneste rensede rett."}</p></header>{money_block}</section>
 <section class="panel" id="trim-loss"><header class="panel-head"><h2>{"Trim loss" if en else "Renseskjæringstap"}</h2><p>{"A recipe quantity is what reaches the plate. This is what must be bought to get there, and the difference is planned loss — not spoilage." if en else "En oppskriftsmengde er det som havner på tallerkenen. Dette er hva som må kjøpes inn for å komme dit, og differansen er planlagt tap — ikke svinn."}</p></header>{trim_block}</section>
 <section class="panel"><header class="panel-head"><h2>{"Waste requiring attention" if en else "Svinn som krever kontroll"}</h2><p>{"Expired stock is excluded before consumption is calculated" if en else "Utgått lager er fjernet før forbruk beregnes"}</p></header>{waste_block}</section>

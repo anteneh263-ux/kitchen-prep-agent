@@ -39,7 +39,11 @@ def fake_history(monkeypatch):
     """Replace sales history with a controlled series."""
 
     def _install(pairs):
-        monkeypatch.setattr(sales_da, "load_sales_rows", lambda: _rows(pairs))
+        # Mirrors the real signature: recorded days are passed in, so the stub
+        # must accept them and append them the same way the reader does.
+        monkeypatch.setattr(
+            sales_da, "load_sales_rows", lambda extra_rows=None: _rows(pairs) + list(extra_rows or [])
+        )
 
     return _install
 

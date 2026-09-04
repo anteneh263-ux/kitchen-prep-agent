@@ -38,7 +38,11 @@ def _rows(specs):
 @pytest.fixture()
 def fake_history(monkeypatch):
     def _install(specs):
-        monkeypatch.setattr(sales_da, "load_sales_rows", lambda: _rows(specs))
+        # Mirrors the real signature: recorded days are passed in, so the stub
+        # must accept them and append them the same way the reader does.
+        monkeypatch.setattr(
+            sales_da, "load_sales_rows", lambda extra_rows=None: _rows(specs) + list(extra_rows or [])
+        )
 
     return _install
 

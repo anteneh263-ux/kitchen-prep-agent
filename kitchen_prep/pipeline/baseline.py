@@ -16,13 +16,17 @@ WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturd
 HISTORY_WEEKS = 4
 
 
-def baseline_forecast(date: str, expected_covers: int) -> Forecast:
+def baseline_forecast(
+    date: str, expected_covers: int, extra_rows: list[dict] | None = None
+) -> Forecast:
     from datetime import date as _date
 
     weekday = _date.fromisoformat(date).weekday()
     dishes: list[DishForecast] = []
     for dish_id in menu_da.dish_ids():
-        observations = sales_da.same_weekday_observations(date, dish_id, weeks=HISTORY_WEEKS)
+        observations = sales_da.same_weekday_observations(
+            date, dish_id, weeks=HISTORY_WEEKS, extra_rows=extra_rows
+        )
         if observations:
             per_cover = sum(o["qty_per_cover"] for o in observations) / len(observations)
             qty = round(per_cover * expected_covers)

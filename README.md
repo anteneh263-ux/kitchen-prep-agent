@@ -89,6 +89,16 @@ order.
 - **Gemini demand forecasting** with per-dish reasoning and named drivers.
 - **Validated forecasts with a deterministic fallback** — a bad or missing model
   response degrades the plan's *confidence*, never its *correctness*.
+- **A day that is closed, and a forecast that is scored** — recorded sales
+  extend the seeded history instead of overwriting it, so the baseline learns
+  from real service; the morning forecast is scored against what actually sold,
+  per dish and per weekday. A day closed without a real covers count is scored
+  but never taught from, because a per-cover ratio needs a real denominator.
+- **Recorded waste with a reason** — FEFO catches an expired batch; only a person
+  at the bin can see the prepped food thrown at closing time. Over-prepping is
+  reported apart from spoilage, in kroner, because it is the plan scoring itself.
+  Produced minus sold minus thrown is reconciled, and the remainder is named as
+  unaccounted for.
 - **Plate cost, margin and menu engineering** — every portion costed on what is
   *purchased*, not on what reaches the plate, because the difference is the yield
   and ignoring it flatters every trimmed dish. Dishes are classified on the
@@ -339,6 +349,7 @@ What the suite actually proves:
 | `test_prep_vs_replenishment.py` | Today's shortfalls stay separate from future orders; stock expiring before delivery is excluded from the reorder basis |
 | `test_inventory_persistence.py` | Snapshots are replay-safe; deliveries become dated batches; pending orders prevent duplicates; an explicit epoch can start a clean audited chain |
 | `test_fefo.py` | Earliest-expiry batches are consumed first; expired stock is flagged, not consumed |
+| `test_dayclose.py` | A closed day changes the next same-weekday forecast; the seeded history file is never written to; a day without covers is scored but excluded from history; error is signed so the direction survives, and too few observations is reported as such rather than as a bias; over-prepping is reported apart from spoilage; produced minus sold minus thrown is reconciled |
 | `test_costing.py` | A portion is costed on purchased quantity, and costing on prepared weight is shown to understate every trimmed dish; a missing price is refused rather than defaulted to zero; classification needs the whole menu; an alert carries no price and no action, only a flag for a human |
 | `test_intraday.py` | The service curve is a valid cumulative distribution and an unusable one is refused; a thin early signal never rescales the day; an extreme hour is clamped to the band; the dish mix is not reinvented; on-hand is production minus sales; being out now outranks everything with time left |
 | `test_production.py` | The planned quantity comes from the plan, not the payload; producing nothing is a valid record; an unrecorded job is neither complete nor short; the history is append-only and survives a forced replay; recording production never moves stock |
@@ -365,6 +376,9 @@ What the suite actually proves:
 | --- | --- | --- |
 | `GET` | `/` | Mobile-friendly server-rendered HTML view of the latest published plan. Shows run status as **OK**, or **DEGRADERT** when a fallback was used. |
 | `GET` | `/plans/latest` | The latest published plan as JSON. Returns `{"detail": "no plans yet"}` when nothing has been published. |
+| `POST` | `/days/close` | Closes a day: real sales per dish, scored against the morning forecast. Body: `sales`, optional `date`, `covers`, `source`. With `covers` the day becomes a history row for future forecasts; without it the day is scored but teaches nothing. |
+| `POST` | `/waste` | Records what was thrown and why. Body: `item_id`, `qty`, `reason` (`expired`, `overprepped`, `spillage`, `quality`, `other`), optional `date`, `note`. |
+| `GET` | `/accuracy` | Signed forecast error overall and per weekday, with the observation count behind each. Reported, never applied. |
 | `POST` | `/sales/today` | Records cumulative sales per dish so far today. Body: `sales` (dish_id → quantity), optional `date`, `as_of` (HH:MM), `source`. Cumulative, not increments, so a point-of-sale can retry or duplicate without corrupting the picture. |
 | `GET` | `/intraday` | What to cook now, recomputed from the latest sales observation. `?date=` and `?as_of=` let you ask what the line looks like at another moment. |
 | `POST` | `/production` | Records what a station actually produced. Body: `task_id`, `produced_qty`, optional `date`, `note`, `recorded_by`. The planned quantity is read from the stored plan, never from the request. Accepts JSON or an HTML form post. |
@@ -561,6 +575,15 @@ Stated plainly, because a system that hides its edges is not safe to run unatten
   the next day that is not yet planned — a day that has been planned is never
   rewritten, so a correction entered late shifts forward rather than
   invalidating a plan the kitchen is already working from.
+- **Bias is measured, never applied.** `/accuracy` reports signed forecast error
+  per weekday with the count behind it; nothing adjusts the baseline
+  automatically. With one restaurant a weekday effect takes months of closed days
+  before it is a bias rather than noise, and a correction applied too early would
+  be indistinguishable from overfitting.
+- **Closing a day is a human moment.** Recorded actuals, waste and covers all
+  depend on someone doing it at the end of service. An unfed input is worse than
+  no input, because it looks like data — so the system reports how many days were
+  actually closed rather than assuming.
 - **Prices are static and synthetic.** Costs sit in the ingredient master and do
   not move with an invoice; a real deployment would feed them from purchasing.
   Nothing in the system re-prices a menu or changes a portion — a margin alert is
@@ -642,6 +665,7 @@ kitchen-prep-agent/
 │   │   └── briefing_step.py         # Gemini step 2: briefing + deterministic fallback
 │   ├── pipeline/
 │   │   ├── costing.py               # Yield-aware plate cost, margin, menu matrix
+│   │   ├── dayclose.py              # Closed days, forecast error, recorded waste
 │   │   ├── intraday.py              # Pace revision + cook-now from live sales
 │   │   ├── receiving.py             # Goods receipt + stock count corrections
 │   │   ├── production.py            # Recorded production against the prep plan

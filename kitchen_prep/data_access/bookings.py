@@ -36,13 +36,13 @@ def _load() -> dict[str, int]:
     return out
 
 
-def _estimate_from_history(date: str) -> tuple[int, str]:
+def _estimate_from_history(date: str, extra_rows: list[dict] | None = None) -> tuple[int, str]:
     """Rounded mean of historical daily covers, preferring the same weekday.
 
     Uses only dates strictly before ``date``. Raises ``CoversUnavailable`` rather
     than returning zero when there is nothing usable to average.
     """
-    series = sales_da.daily_covers_before(date)
+    series = sales_da.daily_covers_before(date, extra_rows)
     if not series:
         raise CoversUnavailable(
             f"No booking for {date} and no usable covers history strictly before it"
@@ -68,7 +68,7 @@ def _estimate_from_history(date: str) -> tuple[int, str]:
     return covers, source
 
 
-def resolve_expected_covers(date: str) -> tuple[int, str]:
+def resolve_expected_covers(date: str, extra_rows: list[dict] | None = None) -> tuple[int, str]:
     """Return ``(expected_covers, covers_source)`` for ``date``.
 
     An exact booking row is used unchanged. Otherwise the figure is estimated
@@ -77,7 +77,7 @@ def resolve_expected_covers(date: str) -> tuple[int, str]:
     bookings = _load()
     if date in bookings:
         return bookings[date], COVERS_SOURCE_BOOKING
-    return _estimate_from_history(date)
+    return _estimate_from_history(date, extra_rows)
 
 
 def get_expected_covers(date: str) -> int:

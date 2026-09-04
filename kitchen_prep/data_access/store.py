@@ -10,6 +10,7 @@ Collections / concepts:
   - inventory_snapshots/{date} -> replay-safe input/output batches for each day
   - inventory_adjustments/{id}  -> append-only physical events (receipts, counts)
   - sales_observations/{id}     -> append-only cumulative sales during service
+  - day_actuals/{date}          -> the closed day: real sales, scored against plan
 """
 from __future__ import annotations
 
@@ -44,6 +45,10 @@ class BaseStore:
     def list_inventory_adjustments(self, effective_date: str) -> list[dict]: ...
     def record_sales_observation(self, date: str, observation: dict) -> dict: ...
     def list_sales_observations(self, date: str) -> list[dict]: ...
+    def record_day_close(self, date: str, actuals: dict) -> dict: ...
+    def get_day_actuals(self, date: str) -> dict | None: ...
+    def list_day_actuals(self, limit: int = 120) -> list[dict]: ...
+    def record_waste(self, date: str, record: dict) -> dict | None: ...
 
 
 class LocalJsonStore(BaseStore):
@@ -54,11 +59,13 @@ class LocalJsonStore(BaseStore):
         self.inventory_dir = self.base / "inventory_snapshots"
         self.adjustments_dir = self.base / "inventory_adjustments"
         self.sales_dir = self.base / "sales_observations"
+        self.actuals_dir = self.base / "day_actuals"
         self.plans_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.inventory_dir.mkdir(parents=True, exist_ok=True)
         self.adjustments_dir.mkdir(parents=True, exist_ok=True)
         self.sales_dir.mkdir(parents=True, exist_ok=True)
+        self.actuals_dir.mkdir(parents=True, exist_ok=True)
 
     def _plan_path(self, date: str) -> Path:
         return self.plans_dir / f"{date}.json"
@@ -192,6 +199,37 @@ class LocalJsonStore(BaseStore):
             return []
         with open(path, encoding="utf-8") as fh:
             return [json.loads(line) for line in fh if line.strip()]
+
+    def _actuals_path(self, date: str) -> Path:
+        return self.actuals_dir / f"{date}.json"
+
+    def record_day_close(self, date: str, actuals: dict) -> dict:
+        """Closing a day again overwrites it: a corrected count is the truth."""
+        with open(self._actuals_path(date), "w", encoding="utf-8") as fh:
+            json.dump(actuals, fh, indent=2, ensure_ascii=False)
+        return actuals
+
+    def get_day_actuals(self, date: str) -> dict | None:
+        path = self._actuals_path(date)
+        if not path.exists():
+            return None
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def list_day_actuals(self, limit: int = 120) -> list[dict]:
+        days = []
+        for path in sorted(self.actuals_dir.glob("*.json"))[-limit:]:
+            with open(path, encoding="utf-8") as fh:
+                days.append(json.load(fh))
+        return days
+
+    def record_waste(self, date: str, record: dict) -> dict | None:
+        """Append-only on the plan, like every other thing a person recorded."""
+        plan = self.get_plan(date)
+        if plan is None:
+            return None
+        plan.setdefault("waste_records", []).append(dict(record))
+        return self.save_plan(date, plan, overwrite=True)
 
     def _sales_path(self, date: str) -> Path:
         return self.sales_dir / f"{date}.jsonl"
@@ -377,6 +415,43 @@ class FirestoreStore(BaseStore):  # pragma: no cover - requires cloud credential
     def record_sales_observation(self, date: str, observation: dict) -> dict:
         self.db.collection("sales_observations").add({**observation, "date": date})
         return observation
+
+    def record_day_close(self, date: str, actuals: dict) -> dict:
+        self.db.collection("day_actuals").document(date).set(actuals)
+        return actuals
+
+    def get_day_actuals(self, date: str) -> dict | None:
+        snap = self.db.collection("day_actuals").document(date).get()
+        return snap.to_dict() if snap.exists else None
+
+    def list_day_actuals(self, limit: int = 120) -> list[dict]:
+        from google.cloud import firestore  # lazy import
+
+        query = (
+            self.db.collection("day_actuals")
+            .order_by("date", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+            .stream()
+        )
+        return sorted((doc.to_dict() for doc in query), key=lambda day: day["date"])
+
+    def record_waste(self, date: str, record: dict) -> dict | None:
+        from google.cloud import firestore  # lazy import
+
+        ref = self.db.collection("daily_plans").document(date)
+        transaction = self.db.transaction()
+
+        @firestore.transactional
+        def update(txn):
+            snap = ref.get(transaction=txn)
+            if not snap.exists:
+                return None
+            plan = snap.to_dict()
+            plan.setdefault("waste_records", []).append(dict(record))
+            txn.set(ref, plan)
+            return plan
+
+        return update(transaction)
 
     def list_sales_observations(self, date: str) -> list[dict]:
         query = self.db.collection("sales_observations").where("date", "==", date).stream()

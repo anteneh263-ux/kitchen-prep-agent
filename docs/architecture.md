@@ -280,6 +280,41 @@ post-delivery stock, which is what the person counting was looking at.
 is published on the plan as a `stock_variance` and shown on the dashboard, and
 the append-only adjustment log records who entered it and when.
 
+## Closing the day
+
+Until this, the system had no memory across midnight. It forecasts from
+`sales_history.csv`, which is generated from a fixed seed and never grows — so on
+any date past the seed window the baseline reads weeks-old history and keeps
+doing so forever. Nothing ever asked whether yesterday's forecast was any good.
+
+`POST /days/close` freezes a day's real sales and scores the morning forecast
+against them, per dish and in total. `POST /waste` records what was thrown and
+why. Between them they close the last open loop: one measures whether the
+*forecast* was right, the other whether the *production* was.
+
+**Recorded days extend the seed, never overwrite it.** They are stored in
+`day_actuals` and passed into the forecast explicitly, so a fresh clone still
+generates byte-identical seed data and a test and a production run cannot
+disagree about the past. The history a forecast sees is chosen by the caller that
+owns the store — never by a hidden global.
+
+**Covers are never invented.** A history row is a quantity *per cover*. A day
+closed without a real covers count is still scored, but excluded from the
+history: dividing by the forecast instead of the actual would quietly let the
+forecast judge itself.
+
+**Bias is measured, not applied.** `/accuracy` reports signed error — signed,
+because a kitchen needs to know it runs *hot* on Fridays and an absolute error
+hides the direction — with the observation count behind each weekday and an
+explicit `enough_to_judge` flag. Nothing adjusts the baseline automatically.
+
+**Over-prepping is reported apart from spoilage.** An expired batch is a rotation
+problem; a bin full of prepped food at closing time is a production problem, and
+it is the intraday loop scoring itself. Averaging them together hides both.
+
+**Produced minus sold minus thrown should be nothing.** What is left over is
+published as unaccounted for, rather than quietly absorbed.
+
 ## Money: plate cost and margin
 
 Cost has the same shape as the yield problem, and gets it wrong in the same

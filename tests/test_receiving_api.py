@@ -283,3 +283,115 @@ def test_a_sales_form_post_redirects_to_the_cook_now_panel(client):
     )
     assert response.status_code == 303
     assert response.headers["location"] == f"/?lang=no&date={config.DEMO_DATE}#cook-now"
+
+
+# --- Closing the day -----------------------------------------------------
+
+
+CLOSE_SALES = {"classic_burger": 30, "bbq_ribs": 12}
+
+
+def test_closing_a_day_scores_the_forecast_and_is_readable_back(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+
+    response = client.post(
+        "/days/close",
+        json={"date": config.DEMO_DATE, "covers": 90, "sales": CLOSE_SALES, "source": "toast"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["actual_total"] == 42
+    assert body["usable_as_history"] is True
+    assert body["variance_pct"] is not None
+
+    accuracy = client.get("/accuracy").json()
+    assert accuracy["closed_days"] == 1
+    assert [day["date"] for day in accuracy["days"]] == [config.DEMO_DATE]
+
+
+def test_a_day_closed_without_covers_is_scored_but_not_taught_from(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    body = client.post(
+        "/days/close", json={"date": config.DEMO_DATE, "sales": CLOSE_SALES}
+    ).json()
+
+    assert body["covers"] is None
+    assert body["usable_as_history"] is False
+
+
+def test_closing_a_day_twice_replaces_it(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    client.post("/days/close", json={"date": config.DEMO_DATE, "sales": {"bbq_ribs": 1}})
+    client.post("/days/close", json={"date": config.DEMO_DATE, "sales": {"bbq_ribs": 9}})
+
+    accuracy = client.get("/accuracy").json()
+    assert accuracy["closed_days"] == 1
+    assert accuracy["days"][0]["actual_total"] == 9
+
+
+def test_closing_needs_a_plan_and_a_valid_payload(client):
+    assert client.post("/days/close", json={"date": "2026-01-01", "sales": CLOSE_SALES}).status_code == 404
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    assert client.post("/days/close", json={"date": config.DEMO_DATE, "sales": {}}).status_code == 422
+
+
+def test_accuracy_claims_nothing_before_any_day_is_closed(client):
+    body = client.get("/accuracy").json()
+    assert body["closed_days"] == 0
+    assert body["mean_error_pct"] is None
+
+
+# --- Waste ---------------------------------------------------------------
+
+
+def test_waste_is_recorded_with_its_reason_and_shows_on_the_screen(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+
+    response = client.post(
+        "/waste",
+        json={"date": config.DEMO_DATE, "item_id": "chicken_wings", "qty": 2.5,
+              "reason": "overprepped", "note": "for mye"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["reason"] == "overprepped"
+
+    plan = client.get("/plans/latest").json()
+    assert [r["item_id"] for r in plan["waste_records"]] == ["chicken_wings"]
+
+    page = client.get("/", params={"date": config.DEMO_DATE}).text
+    assert 'id="day-close"' in page and "Overpreppet" in page
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"item_id": "chicken_wings", "qty": 1},
+        {"item_id": "chicken_wings", "qty": 1, "reason": "fordi"},
+        {"item_id": "nope", "qty": 1, "reason": "expired"},
+        {"item_id": "chicken_wings", "qty": 0, "reason": "expired"},
+    ],
+)
+def test_malformed_waste_is_refused(client, payload):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    assert client.post("/waste", json={**payload, "date": config.DEMO_DATE}).status_code == 422
+
+
+def test_waste_needs_a_plan(client):
+    response = client.post(
+        "/waste", json={"date": "2026-01-01", "item_id": "tomato", "qty": 1, "reason": "expired"}
+    )
+    assert response.status_code == 404
+
+
+def test_a_waste_form_post_redirects_to_the_bin_panel(client):
+    client.post("/runs/daily", json={"date": config.DEMO_DATE})
+    response = client.post(
+        "/waste",
+        data={"date": config.DEMO_DATE, "item_id": "tomato", "qty": "1.5",
+              "reason": "spillage", "lang": "no"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/?lang=no&date={config.DEMO_DATE}#day-close"

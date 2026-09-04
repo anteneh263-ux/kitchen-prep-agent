@@ -3,6 +3,9 @@
 Endpoints:
   POST /runs/daily            -> start the idempotent daily run (optional {"date": ...})
   GET  /plans/latest          -> latest published plan (simple mobile view)
+  POST /days/close            -> close the day: real sales, scored against the plan
+  POST /waste                 -> record what was thrown, and why
+  GET  /accuracy              -> forecast error over the days that were closed
   POST /sales/today           -> record cumulative sales so far today
   GET  /intraday              -> what to cook now, from what has actually sold
   POST /production            -> record what a station actually produced
@@ -35,7 +38,7 @@ from pydantic import BaseModel
 from .orchestrator import run_daily_prep, today_oslo
 from .data_access import menu as menu_da
 from .data_access import store as store_da
-from .pipeline import intraday, production, receiving
+from .pipeline import costing, dayclose, intraday, production, receiving
 from .render.html import render_home
 
 app = FastAPI(title="Kitchen Prep Agent")
@@ -64,8 +67,20 @@ def home(lang: str = "no", date: str | None = None, as_of: str | None = None) ->
             available_plans=plans,
             interactive=True,
             intraday=_intraday_view(store, plan, as_of) if plan else None,
+            day_close=_day_close_view(store, plan) if plan else None,
         )
     )
+
+
+def _day_close_view(store, plan: dict) -> dict:
+    """Recorded waste and the produced-minus-sold-minus-thrown reconciliation."""
+    records = plan.get("waste_records", []) or []
+    closed = store.get_day_actuals(plan["date"])
+    return {
+        "actuals": closed,
+        "waste": dayclose.waste_summary(records, costing_module=costing),
+        "reconciliation": dayclose.reconcile(plan, closed, records),
+    }
 
 
 def _intraday_view(store, plan: dict, as_of: str | None) -> dict | None:
@@ -323,3 +338,108 @@ def intraday_view(date: str | None = None, as_of: str | None = None) -> dict[str
     if view is None:
         return {"date": run_date, "detail": "no sales recorded yet"}
     return {"date": run_date, **view}
+
+
+# --- Closing the day ------------------------------------------------------
+
+
+@app.post("/days/close")
+async def close_day(request: Request):
+    """Freeze a day's real sales and score the morning forecast against them.
+
+    Body: ``sales`` (dish_id -> quantity), optionally ``date``, ``covers``,
+    ``source``, ``recorded_by``.
+
+    ``covers`` is optional and consequential: with it the day becomes a usable
+    history row for future forecasts, without it the day is still scored but
+    teaches the baseline nothing, because a per-cover ratio needs a real
+    denominator and inventing one would let the forecast judge itself.
+    """
+    payload, from_form = await _request_payload(request)
+    store = store_da.get_store()
+    date = str(payload.get("date") or today_oslo())
+
+    plan = store.get_plan(date)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="no plan for that date")
+
+    if from_form:
+        sales = {
+            key.split("sales.", 1)[1]: value
+            for key, value in payload.items()
+            if key.startswith("sales.") and value not in ("", None)
+        }
+        if sales:
+            payload["sales"] = sales
+
+    try:
+        actuals = dayclose.validate_close(
+            payload, plan, recorded_at=datetime.now(timezone.utc).isoformat()
+        )
+    except dayclose.CloseRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    store.record_day_close(date, actuals)
+
+    if from_form:
+        lang = "en" if str(payload.get("lang", "no")) == "en" else "no"
+        return RedirectResponse(url=f"/?lang={lang}&date={date}#day-close", status_code=303)
+    return JSONResponse(content=actuals, status_code=201)
+
+
+@app.post("/waste")
+async def record_waste(request: Request):
+    """Record what was thrown and why.
+
+    Body: ``item_id``, ``qty``, ``reason`` (expired, overprepped, spillage,
+    quality, other), optionally ``date``, ``note``, ``recorded_by``.
+
+    FEFO already catches a batch that expired. This is for what only a person at
+    the bin can see — above all the prepped food thrown at closing time, which is
+    the honest score on whether the plan produced too much.
+    """
+    payload, from_form = await _request_payload(request)
+    store = store_da.get_store()
+    date = str(payload.get("date") or today_oslo())
+
+    if store.get_plan(date) is None:
+        raise HTTPException(status_code=404, detail="no plan for that date")
+
+    try:
+        record = dayclose.validate_waste(
+            payload, recorded_at=datetime.now(timezone.utc).isoformat()
+        )
+    except dayclose.WasteRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    store.record_waste(date, record)
+
+    if from_form:
+        lang = "en" if str(payload.get("lang", "no")) == "en" else "no"
+        return RedirectResponse(url=f"/?lang={lang}&date={date}#day-close", status_code=303)
+    return JSONResponse(content=record, status_code=201)
+
+
+@app.get("/accuracy")
+def accuracy() -> dict[str, Any]:
+    """How wrong the morning forecast has been, per weekday and overall.
+
+    Reported, never applied. A weekday with too few closed days is returned with
+    its count and no claim of bias.
+    """
+    store = store_da.get_store()
+    days = store.list_day_actuals()
+    return {
+        **dayclose.forecast_error(days),
+        "days": [
+            {
+                "date": day["date"],
+                "weekday": day["weekday"],
+                "forecast_total": day["forecast_total"],
+                "actual_total": day["actual_total"],
+                "variance_pct": day["variance_pct"],
+                "usable_as_history": day["usable_as_history"],
+            }
+            for day in days
+        ],
+    }

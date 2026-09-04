@@ -7,7 +7,13 @@ from datetime import date as _date
 from .. import config
 
 
-def load_sales_rows() -> list[dict]:
+def load_sales_rows(extra_rows: list[dict] | None = None) -> list[dict]:
+    """Seeded history, optionally extended with recorded days.
+
+    Recorded days are passed in rather than read from a store, so the caller
+    that owns the store decides what history a forecast sees. A hidden global
+    would make a test and a production run disagree about the past.
+    """
     rows: list[dict] = []
     with open(config.SALES_HISTORY_PATH, newline="", encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
@@ -22,10 +28,22 @@ def load_sales_rows() -> list[dict]:
                     "precipitation_mm": float(r["precipitation_mm"]),
                 }
             )
+    for row in extra_rows or []:
+        rows.append(
+            {
+                "date": row["date"],
+                "dish_id": row["dish_id"],
+                "qty_sold": int(row["qty_sold"]),
+                "covers": int(row["covers"]),
+                "weather_code": int(row.get("weather_code", 0)),
+                "temperature_c": float(row.get("temperature_c", 0.0)),
+                "precipitation_mm": float(row.get("precipitation_mm", 0.0)),
+            }
+        )
     return rows
 
 
-def daily_covers_before(target_date: str) -> dict[str, int]:
+def daily_covers_before(target_date: str, extra_rows: list[dict] | None = None) -> dict[str, int]:
     """Return ``{date: covers}`` for history dates strictly before ``target_date``.
 
     Sales history holds one row per dish per date, so the covers figure repeats
@@ -35,7 +53,7 @@ def daily_covers_before(target_date: str) -> dict[str, int]:
     """
     target = _date.fromisoformat(target_date)
     out: dict[str, int] = {}
-    for row in load_sales_rows():
+    for row in load_sales_rows(extra_rows):
         if _date.fromisoformat(row["date"]) >= target:
             continue
         if row["covers"] > 0:
@@ -43,7 +61,9 @@ def daily_covers_before(target_date: str) -> dict[str, int]:
     return out
 
 
-def same_weekday_observations(target_date: str, dish_id: str, weeks: int = 4) -> list[dict]:
+def same_weekday_observations(
+    target_date: str, dish_id: str, weeks: int = 4, extra_rows: list[dict] | None = None
+) -> list[dict]:
     """Return the last ``weeks`` same-weekday observations for ``dish_id``,
     strictly before ``target_date`` (guards against future leakage).
 
@@ -58,7 +78,7 @@ def same_weekday_observations(target_date: str, dish_id: str, weeks: int = 4) ->
     target = _date.fromisoformat(target_date)
     weekday = target.weekday()
     hits: list[dict] = []
-    for row in load_sales_rows():
+    for row in load_sales_rows(extra_rows):
         if row["dish_id"] != dish_id or row["covers"] <= 0:
             continue
         row_date = _date.fromisoformat(row["date"])
