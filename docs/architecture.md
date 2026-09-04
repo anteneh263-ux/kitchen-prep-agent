@@ -175,16 +175,49 @@ the demo scope.
 4. **Gemini step 1 via Google Gen AI SDK** — a demand forecast is proposed, then validated. Anything
    outside the contract falls back to the same-weekday baseline, and the plan
    records which path was taken in `forecast_source`.
-5. **Deterministic core** — recipe explosion, FEFO consumption of today's
+5. **Physical corrections** — recorded goods receipts and stock counts for this
+   date are applied while the day's inventory input is frozen, so the plan is
+   built on what the kitchen actually has rather than on what was ordered.
+6. **Deterministic core** — recipe explosion, FEFO consumption of today's
    requirements, prep shortfalls, prep task ordering, then replenishment to par
    from what is genuinely left.
-6. **Gemini step 2 via Google Gen AI SDK** — the frozen plan is handed to the model, which returns a
+7. **Gemini step 2 via Google Gen AI SDK** — the frozen plan is handed to the model, which returns a
    prioritisation and briefing in a fixed JSON shape. Invalid or unavailable
    output falls back to a deterministic briefing built from the same plan.
-7. **Publish** — Python renders Markdown, the plan is stored, and the run log is
+8. **Publish** — Python renders Markdown, the plan is stored, and the run log is
    appended whether the run succeeded or failed.
-8. **Consumption** — the kitchen opens `GET /` on a phone; other systems read
+9. **Consumption** — the kitchen opens `GET /` on a phone; other systems read
    `GET /plans/latest`.
+
+## Physical corrections: goods receipt and stock count
+
+Two assumptions would otherwise compound down the snapshot chain: that every
+order arrives in full on its delivery date, and that theoretical FEFO
+consumption is what physically happened. `pipeline/receiving.py` corrects both
+from recorded events, and owns no arithmetic the kitchen cannot check.
+
+| Event | What it means | What it does |
+| --- | --- | --- |
+| `receipt` | What a delivery actually contained | Replaces the assumed arrival batch `delivery-<order date>-<item>`, so a partial or missing delivery reduces stock instead of inflating it |
+| `count` | What a physical count actually found | Reconciles the item's batches to the counted quantity: a shortage is removed earliest-expiry-first, a surplus is added at the item's latest known expiry |
+
+Four properties make this safe to leave running:
+
+**Corrections are applied once, while the input is frozen.** They are never
+replayed over an existing snapshot, so a forced rerun of a corrected day reuses
+the same input and cannot double-apply anything.
+
+**A planned day is never rewritten.** `resolve_effective_date` rolls an event
+forward to the first date whose inventory input is not yet frozen. A delivery
+logged at 10:00 changes tomorrow's plan, not the plan the kitchen is working
+from right now.
+
+**Receipts are applied before counts.** A count therefore reconciles
+post-delivery stock, which is what the person counting was looking at.
+
+**Nothing is silently absorbed.** Every difference between expected and actual
+is published on the plan as a `stock_variance` and shown on the dashboard, and
+the append-only adjustment log records who entered it and when.
 
 ## Public interactive sandbox
 

@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Offline test suite (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate the seeded synthetic sales history
+        run: python scripts/generate_sales_history.py
+
+      - name: Verify data integrity and absence of future leakage
+        run: python scripts/verify_data.py
+
+      # No network, no API key, no cloud resources: the integration test that
+      # requires a real Gemini key is deselected here by its marker.
+      - name: Run the offline suite
+        run: pytest -m "not integration" -q
+
+  image:
+    name: Cloud Run image builds
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The image generates sales history and verifies data at build time, so a
+      # successful build also proves the runtime data contract still holds.
+      - name: Build the deployment image
+        run: docker build --tag kitchen-prep-agent:ci .

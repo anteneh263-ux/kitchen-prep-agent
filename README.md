@@ -98,6 +98,10 @@ order.
 - **Par-level replenishment on post-consumption stock**, with expiring batches
   excluded and open deliveries counted; received orders become dated FEFO
   batches without duplicate ordering.
+- **Goods receipt and stock count** — the kitchen records what a delivery
+  actually contained and what a count actually found. Partial deliveries and
+  counted shortages correct the snapshot chain instead of compounding silently,
+  and every variance is published with the plan.
 - **Gemini prioritisation and briefing**, validated against a fixed JSON
   contract before publication.
 - **Idempotent per date** — Scheduler retries never produce a second plan.
@@ -292,7 +296,10 @@ none of these.**
 pytest -m "not integration"
 ```
 
-The offline suite requires no network, no API key and no cloud resources.
+The offline suite requires no network, no API key and no cloud resources. It
+runs on every push and pull request through
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), on Python 3.11 and 3.12,
+alongside a build of the deployment image.
 
 ```bash
 # Real Gemini end to end (requires GOOGLE_API_KEY and network)
@@ -307,6 +314,8 @@ What the suite actually proves:
 | `test_prep_vs_replenishment.py` | Today's shortfalls stay separate from future orders; stock expiring before delivery is excluded from the reorder basis |
 | `test_inventory_persistence.py` | Snapshots are replay-safe; deliveries become dated batches; pending orders prevent duplicates; an explicit epoch can start a clean audited chain |
 | `test_fefo.py` | Earliest-expiry batches are consumed first; expired stock is flagged, not consumed |
+| `test_receiving.py` | A short delivery replaces the assumed arrival; a counted shortage is taken earliest-expiry-first; receipts apply before counts; a forced replay never applies an event twice; a day with no events hands the chain back untouched |
+| `test_receiving_api.py` | Both receiving routes accept JSON and HTML form posts; malformed events are refused and not stored; an event recorded after the run rolls forward to the next open day |
 | `test_forecast_validate.py` | Missing dishes, unknown ids, non-integer or negative quantities, and out-of-band ratios are all rejected |
 | `test_briefing_contract.py` | The briefing JSON contract is enforced |
 | `test_gemini_client_errors.py` | 408/429/5xx/network → documented fallback; 400/401/403/404 → the run crashes rather than degrading silently |
@@ -326,6 +335,9 @@ What the suite actually proves:
 | --- | --- | --- |
 | `GET` | `/` | Mobile-friendly server-rendered HTML view of the latest published plan. Shows run status as **OK**, or **DEGRADERT** when a fallback was used. |
 | `GET` | `/plans/latest` | The latest published plan as JSON. Returns `{"detail": "no plans yet"}` when nothing has been published. |
+| `POST` | `/inventory/receipts` | Records what a delivery actually contained. Body: `item_id`, `qty_received`, optional `order_by_date` (corrects the assumed arrival), `expiry_date`, `note`, `recorded_by`. Accepts JSON or an HTML form post. |
+| `POST` | `/inventory/counts` | Records what a physical count actually found. Body: `item_id`, `counted_qty`, optional `note`, `recorded_by`. Accepts JSON or an HTML form post. |
+| `GET` | `/inventory/adjustments` | Physical events recorded for a date (`?date=YYYY-MM-DD`, default today). |
 | `POST` | `/runs/daily` | Starts the idempotent daily run. Optional body: `{"date": "YYYY-MM-DD", "force": false}`. The date defaults to today in Europe/Oslo. Returns a summary: date, expected covers, and counts of prep tasks, shortfalls, orders and flagged waste, plus `forecast_source`. |
 | `GET` | `/healthz` | Liveness probe — `{"status": "ok"}`. |
 
@@ -336,6 +348,15 @@ curl -X POST http://localhost:8080/runs/daily \
 
 # Read the latest plan
 curl http://localhost:8080/plans/latest
+
+# Record a short delivery; it applies to the next day that is not yet planned
+curl -X POST http://localhost:8080/inventory/receipts \
+  -H 'Content-Type: application/json' \
+  -d '{"item_id":"beef_patty","qty_received":40,"order_by_date":"2026-08-14"}'
+
+# Record a physical count
+curl -X POST http://localhost:8080/inventory/counts \
+  -H 'Content-Type: application/json' -d '{"item_id":"tomato","counted_qty":2.5}'
 ```
 
 ## Reference Run
@@ -494,8 +515,11 @@ Stated plainly, because a system that hides its edges is not safe to run unatten
   from the synthetic seed. Each later date freezes the previous output plus
   orders due that day as dated FEFO input batches. A forced rerun reuses the
   frozen input, so it cannot consume or receive twice. Pending deliveries count
-  toward stock at delivery and prevent duplicate orders. Physical receiving
-  discrepancies remain a future integration.
+  toward stock at delivery and prevent duplicate orders. Receiving discrepancies
+  are corrected through recorded goods receipts and stock counts, which apply to
+  the next day that is not yet planned — a day that has been planned is never
+  rewritten, so a correction entered late shifts forward rather than
+  invalidating a plan the kitchen is already working from.
 - **Intermediate demand during multi-day lead times is not modelled.** For an
   ingredient with a 3-day lead time, the order covers the gap to par at the
   delivery date, but demand occurring between today and delivery is not
@@ -534,6 +558,7 @@ Stated plainly, because a system that hides its edges is not safe to run unatten
 ```
 kitchen-prep-agent/
 ├── README.md
+├── .github/workflows/ci.yml         # Offline suite + image build on every push
 ├── Dockerfile                       # Cloud Run image (uvicorn on $PORT)
 ├── .dockerignore
 ├── docs/
@@ -553,6 +578,7 @@ kitchen-prep-agent/
 │   │   ├── forecast_step.py         # Gemini step 1: propose a forecast
 │   │   └── briefing_step.py         # Gemini step 2: briefing + deterministic fallback
 │   ├── pipeline/
+│   │   ├── receiving.py             # Goods receipt + stock count corrections
 │   │   ├── forecast_validate.py     # Validation gate (rejects → baseline)
 │   │   ├── baseline.py              # Deterministic same-weekday forecast
 │   │   ├── ingredients.py           # Recipe explosion → requirements

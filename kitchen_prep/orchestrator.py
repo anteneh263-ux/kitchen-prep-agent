@@ -23,6 +23,7 @@ from .gemini import briefing_step, forecast_step
 from .gemini.client import GeminiUnavailable, get_client
 from .pipeline import ingredients as ingredients_pipe
 from .pipeline import prep as prep_pipe
+from .pipeline import receiving as receiving_pipe
 from .pipeline import replenishment as replen_pipe
 from .pipeline.baseline import baseline_forecast
 from .pipeline.forecast_validate import ForecastRejected, validate_and_build
@@ -153,17 +154,38 @@ def run_daily_prep(
         prior_orders = _prior_orders(store, date)
         arrivals = _arrival_batches(date, prior_orders)
         seed_batches = _epoch_seed_batches(date) if reset_from_seed else store_da.load_seed_batches()
+        adjustments = store.list_inventory_adjustments(date)
+
+        def _apply_physical_events(input_batches: list[dict]) -> tuple[list[dict], dict]:
+            """Correct the frozen input against what the kitchen actually saw."""
+            result = receiving_pipe.apply_adjustments(
+                input_batches, adjustments, date, menu_da.ingredients_by_id()
+            )
+            return result["batches"], {
+                "applied": result["applied"],
+                "variances": result["variances"],
+            }
+
         batches = store.get_or_create_inventory_input(
             date,
             seed_batches,
             arrivals,
             reset_from_seed=reset_from_seed,
+            adjust=_apply_physical_events,
         )
+        # Read the report back from the snapshot: on a forced replay the input is
+        # already frozen, so the adjustments were applied on the first run only.
+        snapshot = store.get_inventory_snapshot(date) or {}
+        report = snapshot.get("adjustment_report") or {"applied": [], "variances": []}
+        applied_adjustments = report.get("applied", [])
+        stock_variances = report.get("variances", [])
         log(
             "inventory_input",
             batches=len(batches),
             arrivals=len(arrivals),
             reset_from_seed=reset_from_seed,
+            adjustments_applied=len(applied_adjustments),
+            stock_variances=len(stock_variances),
         )
         consumption = prep_pipe.consume_today(required, batches, date)
         log(
@@ -203,6 +225,8 @@ def run_daily_prep(
             "prep_shortfalls": consumption["prep_shortfalls"],
             "replenishment_orders": orders,
             "waste_flagged": consumption["waste_flagged"],
+            "inventory_adjustments": applied_adjustments,
+            "stock_variances": stock_variances,
             "remaining_stock": remaining_stock,
             "generated_at": _now_oslo(),
         }

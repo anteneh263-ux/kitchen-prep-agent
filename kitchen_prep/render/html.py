@@ -245,6 +245,22 @@ h1 { margin: 0; font-size: clamp(1.7rem, 5vw, 2.7rem); line-height: 1.08; letter
 .button:hover { background: var(--brand-2); }
 .button--secondary { color: var(--brand); background: white; border: 1px solid #b5cec0; }
 .button--secondary:hover { background: var(--brand-soft); }
+.intake { display: grid; gap: .8rem; padding: 0 1.15rem 1.1rem; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.intake form { display: grid; gap: .55rem; align-content: start; padding: .9rem; border: 1px solid var(--line);
+  border-radius: .8rem; background: var(--canvas); margin: 0; }
+.intake h3 { margin: 0; font-size: .82rem; font-weight: 850; }
+.intake .hint { margin: 0; color: var(--muted); font-size: .72rem; line-height: 1.4; }
+.intake label { display: grid; gap: .25rem; color: var(--muted); font-size: .66rem; font-weight: 850;
+  text-transform: uppercase; letter-spacing: .04em; }
+.intake input, .intake select { min-height: 2.3rem; padding: .4rem .55rem; border: 1px solid var(--line);
+  border-radius: .55rem; background: var(--paper); color: var(--ink); font: inherit; font-size: .8rem; }
+.intake .button { margin-top: .15rem; }
+.variance-tag { display: inline-block; padding: .12rem .45rem; border-radius: 999px; font-size: .66rem;
+  font-weight: 850; letter-spacing: .03em; }
+.variance-tag--short { color: #8a2b2b; background: #fbeaea; }
+.variance-tag--over { color: #7a5a12; background: #fdf3dc; }
+@media (prefers-color-scheme: dark) { .variance-tag--short { color: #ffc0c0; background: #3a2323; }
+  .variance-tag--over { color: #ffdfa6; background: #3a2f1f; } }
 .trace-details { margin-top: 1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); box-shadow: var(--shadow-sm); }
 .trace-details > summary { cursor: pointer; list-style: none; padding: 1rem 1.15rem; font-size: .88rem; font-weight: 850; }
 .trace-details > summary::-webkit-details-marker { display: none; }
@@ -370,6 +386,98 @@ a.chip[aria-current="page"] { background: var(--brand); color: #fff; }
 
 def _empty(message: str) -> str:
     return f'<p class="empty">{escape(message)}</p>'
+
+
+_ADJUSTMENT_LABELS = {
+    "receipt": ("Goods receipt", "Varemottak"),
+    "count": ("Stock count", "Opptelling"),
+}
+
+
+def _variance_tag(variance_qty: float, unit: str, language: str) -> str:
+    """A signed variance, tagged so a shortage is never mistaken for a surplus."""
+    en = language == "en"
+    if variance_qty < 0:
+        kind, word = "short", ("short" if en else "manko")
+    else:
+        kind, word = "over", ("over" if en else "overskudd")
+    return (
+        f'<span class="variance-tag variance-tag--{kind}">'
+        f'{escape(_number(abs(variance_qty)))} {escape(unit)} {escape(word)}</span>'
+    )
+
+
+def _receiving_block(plan: dict, language: str, interactive: bool) -> str:
+    """Goods receipt and stock count: what the kitchen physically saw.
+
+    The planner assumes deliveries arrive in full and that theoretical
+    consumption is what happened. This panel is where that assumption is
+    corrected, and where corrections already applied to this plan are shown.
+    """
+    en = language == "en"
+    applied = plan.get("inventory_adjustments", []) or []
+    variance_by_id = {
+        str(item.get("adjustment_id")): item for item in (plan.get("stock_variances", []) or [])
+    }
+
+    if applied:
+        rows = []
+        for adjustment in applied:
+            kind = str(adjustment.get("type", ""))
+            label_en, label_no = _ADJUSTMENT_LABELS.get(kind, (kind, kind))
+            item_id = str(adjustment.get("item_id", ""))
+            unit = unit_label(adjustment.get("unit"), language)
+            variance = variance_by_id.get(str(adjustment.get("adjustment_id")))
+            tag = (
+                _variance_tag(float(variance["variance_qty"]), unit, language)
+                if variance
+                else f'<span class="sub">{"as planned" if en else "som planlagt"}</span>'
+            )
+            note = str(adjustment.get("note") or "")
+            recorded_by = str(adjustment.get("recorded_by") or "")
+            detail = " · ".join(part for part in (recorded_by, note) if part)
+            rows.append(
+                f'<li class="row"><div><div class="name">{escape(label_en if en else label_no)}: '
+                f'{escape(_item_name(item_id, language))}</div>'
+                f'<div class="sub">{escape(detail)}</div></div>'
+                f'<span class="qty">{escape(_number(adjustment.get("qty", 0)))} {escape(unit)}<br>{tag}</span></li>'
+            )
+        applied_block = f'<ul class="rows">{"".join(rows)}</ul>'
+    else:
+        applied_block = _empty(
+            "No physical corrections were recorded for this plan."
+            if en
+            else "Ingen fysiske korrigeringer er registrert for denne planen."
+        )
+
+    if not interactive:
+        return applied_block
+
+    options = "".join(
+        f'<option value="{escape(item_id)}">{escape(_item_name(item_id, language))} '
+        f'({escape(unit_label(meta.get("unit"), language))})</option>'
+        for item_id, meta in sorted(menu_da.ingredients_by_id().items())
+    )
+    lang_field = f'<input type="hidden" name="lang" value="{language}">'
+    forms = f'''<div class="intake">
+<form method="post" action="/inventory/receipts">{lang_field}
+<h3>{"Record a goods receipt" if en else "Registrer varemottak"}</h3>
+<p class="hint">{"What the delivery actually contained. Give the order date to correct an assumed arrival." if en else "Hva leveransen faktisk inneholdt. Oppgi bestillingsdato for å korrigere en antatt leveranse."}</p>
+<label>{"Ingredient" if en else "Ingrediens"}<select name="item_id" required>{options}</select></label>
+<label>{"Quantity received" if en else "Mottatt mengde"}<input type="number" name="qty_received" min="0" step="0.001" required></label>
+<label>{"Order date (optional)" if en else "Bestillingsdato (valgfritt)"}<input type="date" name="order_by_date"></label>
+<label>{"Expiry date (optional)" if en else "Utløpsdato (valgfritt)"}<input type="date" name="expiry_date"></label>
+<label>{"Note" if en else "Merknad"}<input type="text" name="note" maxlength="200"></label>
+<button class="button" type="submit">{"Record receipt" if en else "Registrer mottak"}</button></form>
+<form method="post" action="/inventory/counts">{lang_field}
+<h3>{"Record a stock count" if en else "Registrer opptelling"}</h3>
+<p class="hint">{"What a physical count actually found. The counted quantity becomes the truth for that ingredient." if en else "Hva en fysisk telling faktisk fant. Den talte mengden blir fasit for ingrediensen."}</p>
+<label>{"Ingredient" if en else "Ingrediens"}<select name="item_id" required>{options}</select></label>
+<label>{"Counted quantity" if en else "Talt mengde"}<input type="number" name="counted_qty" min="0" step="0.001" required></label>
+<label>{"Note" if en else "Merknad"}<input type="text" name="note" maxlength="200"></label>
+<button class="button" type="submit">{"Record count" if en else "Registrer opptelling"}</button></form></div>
+<p class="hint" style="padding:0 1.15rem 1.1rem">{"A planned day is frozen: a correction recorded now applies to the next day that has not been planned yet." if en else "En planlagt dag er frosset: en korrigering som registreres nå, gjelder fra den første dagen som ennå ikke er planlagt."}</p>'''
+    return applied_block + forms
 
 
 def render_home(
@@ -702,6 +810,7 @@ def render_home(
     else:
         critical_block = f'''<section class="critical-action" id="critical-actions" style="border-left-color:var(--good);border-color:#b9d8c5;background:#f3fbf6;color:var(--ink)">
 <span class="critical-icon" style="background:var(--good)">✓</span><div><h2>{"No unresolved service risks" if en else "Ingen uløste servicerisikoer"}</h2><p>{"The plan is ready for service." if en else "Planen er klar for service."}</p></div></section>'''
+    receiving_block = _receiving_block(plan, language, interactive)
     next_step = (
         "Resolve shortfall" if en else "Løs mangel"
     ) if unresolved_count else "Start prep"
@@ -732,6 +841,7 @@ def render_home(
 <a class="section-link" href="#service-risks">{"Today’s risks" if en else "Dagens risikoer"}</a>
 <a class="section-link" href="#prep-plan">{"Prep plan" if en else "Prep-plan"}</a>
 <a class="section-link" href="#orders">{"Orders" if en else "Bestillinger"}</a>
+<a class="section-link" href="#inventory-receiving">{"Receiving" if en else "Varemottak"}</a>
 <a class="section-link" href="#forecast">{"Forecast" if en else "Prognose"}</a>
 <a class="section-link" href="#traceability">{"Traceability" if en else "Sporbarhet"}</a></nav>
 
@@ -739,6 +849,7 @@ def render_home(
 <section class="panel" id="service-risks"><header class="panel-head"><h2>{"Today’s service risks" if en else "Dagens servicerisikoer"}</h2><p>{"Each shortage includes one recommendation and its approval boundary." if en else "Hver mangel vises med ett anbefalt tiltak og krav til godkjenning."}</p></header>{short_block}</section>
 <section class="panel" id="prep-plan"><header class="panel-head"><h2>{"Today’s prep" if en else "Dagens prep"}</h2><p>{"Work in priority order" if en else "Utfør i prioritert rekkefølge"}</p></header>{prep_block}</section>
 <section class="panel" id="orders"><header class="panel-head"><h2>{"Future replenishment" if en else "Fremtidig lagerpåfylling"}</h2><p>{"Calculated to restore par stock after scheduled arrivals. These deliveries do not resolve today’s service shortfalls." if en else "Beregnet for å fylle lageret til par-nivå etter planlagte leveranser. Disse leveransene løser ikke dagens mangler."}</p></header>{order_block}</section>
+<section class="panel" id="inventory-receiving"><header class="panel-head"><h2>{"Goods receipt and stock count" if en else "Varemottak og opptelling"}</h2><p>{"Physical reality corrects the plan: partial deliveries and counted stock are recorded here and applied to the next planning day." if en else "Fysisk virkelighet korrigerer planen: delleveranser og talt lager registreres her og brukes fra neste planleggingsdag."}</p></header>{receiving_block}</section>
 <section class="panel" id="forecast"><header class="panel-head"><h2>{"Demand forecast" if en else "Etterspørselsprognose"}</h2><p>{"Expected quantities for today’s service" if en else "Forventede mengder for dagens service"}</p></header>
 {f'<div class="driver-list">{driver_block}</div>' if driver_block else f'<p class="empty">{"No forecast drivers are available because the reserve model was used." if en else "Ingen prognosedrivere er tilgjengelige fordi reservemodellen ble brukt."}</p>'}{forecast_rows}</section>
 <section class="panel"><header class="panel-head"><h2>{"Waste requiring attention" if en else "Svinn som krever kontroll"}</h2><p>{"Expired stock is excluded before consumption is calculated" if en else "Utgått lager er fjernet før forbruk beregnes"}</p></header>{waste_block}</section>

@@ -8,12 +8,13 @@ Collections / concepts:
   - daily_plans/{date}   -> the authoritative plan incl. published markdown field
   - run_logs/{run_id}    -> step-by-step log, written even on failure
   - inventory_snapshots/{date} -> replay-safe input/output batches for each day
+  - inventory_adjustments/{id}  -> append-only physical events (receipts, counts)
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .. import config
 
@@ -32,8 +33,13 @@ class BaseStore:
         seed_batches: list[dict],
         arrivals: list[dict] | None = None,
         reset_from_seed: bool = False,
+        adjust: Callable[[list[dict]], tuple[list[dict], dict]] | None = None,
     ) -> list[dict]: ...
     def save_inventory_output(self, date: str, batches: list[dict]) -> None: ...
+    def inventory_snapshot_exists(self, date: str) -> bool: ...
+    def get_inventory_snapshot(self, date: str) -> dict | None: ...
+    def append_inventory_adjustment(self, adjustment: dict) -> dict: ...
+    def list_inventory_adjustments(self, effective_date: str) -> list[dict]: ...
 
 
 class LocalJsonStore(BaseStore):
@@ -42,9 +48,11 @@ class LocalJsonStore(BaseStore):
         self.plans_dir = self.base / "daily_plans"
         self.logs_dir = self.base / "run_logs"
         self.inventory_dir = self.base / "inventory_snapshots"
+        self.adjustments_dir = self.base / "inventory_adjustments"
         self.plans_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.inventory_dir.mkdir(parents=True, exist_ok=True)
+        self.adjustments_dir.mkdir(parents=True, exist_ok=True)
 
     def _plan_path(self, date: str) -> Path:
         return self.plans_dir / f"{date}.json"
@@ -112,8 +120,15 @@ class LocalJsonStore(BaseStore):
         seed_batches: list[dict],
         arrivals: list[dict] | None = None,
         reset_from_seed: bool = False,
+        adjust: Callable[[list[dict]], tuple[list[dict], dict]] | None = None,
     ) -> list[dict]:
-        """Freeze the input for a date; force-runs replay from the same snapshot."""
+        """Freeze the input for a date; force-runs replay from the same snapshot.
+
+        ``adjust`` runs exactly once, while the input is being frozen, and may
+        correct the batches against recorded physical events. Its report is
+        stored beside the input so a replay can read it back without
+        re-applying anything.
+        """
         path = self._inventory_path(date)
         if path.exists():
             with open(path, encoding="utf-8") as fh:
@@ -127,9 +142,41 @@ class LocalJsonStore(BaseStore):
         source = seed_batches if reset_from_seed or previous_output is None else previous_output
         input_batches = [dict(batch) for batch in source]
         input_batches.extend(dict(batch) for batch in (arrivals or []))
+        snapshot: dict[str, Any] = {"date": date}
+        if adjust is not None:
+            input_batches, report = adjust(input_batches)
+            snapshot["adjustment_report"] = report
+        snapshot["input_batches"] = input_batches
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump({"date": date, "input_batches": input_batches}, fh, indent=2)
+            json.dump(snapshot, fh, indent=2)
         return input_batches
+
+    def inventory_snapshot_exists(self, date: str) -> bool:
+        return self._inventory_path(date).exists()
+
+    def get_inventory_snapshot(self, date: str) -> dict | None:
+        path = self._inventory_path(date)
+        if not path.exists():
+            return None
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def _adjustments_path(self, effective_date: str) -> Path:
+        return self.adjustments_dir / f"{effective_date}.jsonl"
+
+    def append_inventory_adjustment(self, adjustment: dict) -> dict:
+        """Append-only: a recorded physical event is never edited or removed."""
+        path = self._adjustments_path(adjustment["effective_date"])
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(adjustment, ensure_ascii=False) + "\n")
+        return adjustment
+
+    def list_inventory_adjustments(self, effective_date: str) -> list[dict]:
+        path = self._adjustments_path(effective_date)
+        if not path.exists():
+            return []
+        with open(path, encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
 
     def save_inventory_output(self, date: str, batches: list[dict]) -> None:
         path = self._inventory_path(date)
@@ -223,6 +270,7 @@ class FirestoreStore(BaseStore):  # pragma: no cover - requires cloud credential
         seed_batches: list[dict],
         arrivals: list[dict] | None = None,
         reset_from_seed: bool = False,
+        adjust: Callable[[list[dict]], tuple[list[dict], dict]] | None = None,
     ) -> list[dict]:
         from google.cloud import firestore  # lazy import
 
@@ -245,10 +293,36 @@ class FirestoreStore(BaseStore):  # pragma: no cover - requires cloud credential
             source = seed_batches if reset_from_seed or previous_output is None else previous_output
             input_batches = [dict(batch) for batch in source]
             input_batches.extend(dict(batch) for batch in (arrivals or []))
-            txn.create(ref, {"date": date, "input_batches": input_batches})
+            snapshot = {"date": date}
+            if adjust is not None:
+                input_batches, report = adjust(input_batches)
+                snapshot["adjustment_report"] = report
+            snapshot["input_batches"] = input_batches
+            txn.create(ref, snapshot)
             return input_batches
 
         return resolve(transaction)
+
+    def inventory_snapshot_exists(self, date: str) -> bool:
+        return self.db.collection("inventory_snapshots").document(date).get().exists
+
+    def get_inventory_snapshot(self, date: str) -> dict | None:
+        snap = self.db.collection("inventory_snapshots").document(date).get()
+        return snap.to_dict() if snap.exists else None
+
+    def append_inventory_adjustment(self, adjustment: dict) -> dict:
+        """Append-only: a recorded physical event is never edited or removed."""
+        ref = self.db.collection("inventory_adjustments").document(adjustment["adjustment_id"])
+        ref.create(adjustment)
+        return adjustment
+
+    def list_inventory_adjustments(self, effective_date: str) -> list[dict]:
+        query = (
+            self.db.collection("inventory_adjustments")
+            .where("effective_date", "==", effective_date)
+            .stream()
+        )
+        return [doc.to_dict() for doc in query]
 
     def save_inventory_output(self, date: str, batches: list[dict]) -> None:
         self.db.collection("inventory_snapshots").document(date).set(

@@ -7,7 +7,7 @@ SCRIPT = Path(__file__).parents[1] / "scripts" / "run_production_check.py"
 SPEC = spec_from_file_location("run_production_check", SCRIPT)
 assert SPEC and SPEC.loader
 check = module_from_spec(SPEC)
-SPEC.loader.exec_module(demo)
+SPEC.loader.exec_module(check)
 
 
 def test_evidence_contains_only_safe_summary_fields():
